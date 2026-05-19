@@ -65,6 +65,16 @@ def _to_min(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _is_valid_pair(o: Journey, b: Journey) -> bool:
+    """Return must be at least 6h after outbound arrival (no phantom same-day pairs)."""
+    if b.train.date < o.train.date:
+        return False
+    if b.train.date == o.train.date:
+        gap = _to_min(b.train.dep) - _to_min(o.train.arr)
+        return gap >= 360  # 6h minimum on-site
+    return True
+
+
 def rank_weekend(
     cfg: Config,
     weekend: Weekend,
@@ -85,7 +95,7 @@ def rank_weekend(
             Pairing(city, o, b, _score_pair(cfg, city, o, b))
             for o in outs
             for b in backs
-            if b.train.date >= o.train.date  # back must be on/after out
+            if _is_valid_pair(o, b)
         ]
         scored.sort(key=lambda p: p.score, reverse=True)
         pairings.extend(scored[:top_n_per_city])

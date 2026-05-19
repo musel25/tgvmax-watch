@@ -13,149 +13,161 @@ origins:
     - "PARIS (intramuros)"
     - "MASSY TGV"  # alternative Paris-area station, still TGVmax-eligible
 
+# --- Priority tier (user's explicit ranking) ---
+# 1 Nice, 2 Montpellier, 3 Marseille, 4 Aix-en-Provence, 5 Annecy,
+# 6 Saint-Tropez, 7 (Annecy again — kept high), 8 La Rochelle.
 cities:
-  - name: Avignon
+  - name: Nice
     region: south
-    stations: ["AVIGNON TGV", "AVIGNON CENTRE"]
-    base_weight: 75
+    stations: ["NICE VILLE"]
+    base_weight: 100        # priority #1
+
+  - name: Montpellier
+    region: south
+    stations: ["MONTPELLIER SAINT ROCH", "MONTPELLIER SUD DE FRANCE"]
+    base_weight: 95         # priority #2
+
+  - name: Marseille
+    region: south
+    stations: ["MARSEILLE ST CHARLES"]
+    base_weight: 92         # priority #3 (also gateway to Cassis / La Ciotat)
 
   - name: Aix-en-Provence
     region: south
     stations: ["AIX EN PROVENCE TGV"]
     extra_leg: "shuttle bus to centre, 15min, ~€5"
-    base_weight: 70
+    base_weight: 90         # priority #4
 
-  - name: Arles
-    region: south
-    stations: ["ARLES"]
-    base_weight: 70
+  - name: Annecy
+    region: alps
+    stations: ["ANNECY"]
+    base_weight: 88         # priority #5 & #7 (fondue)
 
-  - name: Marseille
+  - name: Saint-Tropez
     region: south
-    stations: ["MARSEILLE ST CHARLES"]
-    base_weight: 55  # gateway to Cassis/La Ciotat
-
-  - name: Cassis
-    region: south
-    stations: ["MARSEILLE ST CHARLES"]
+    stations: ["ST RAPHAEL VALESCURE", "LES ARCS DRAGUIGNAN"]
     needs_extra_leg: true
-    extra_leg: "Marseille→Cassis TER 20min, ~€7"
-    base_weight: 80
+    extra_leg: "St-Raphaël→St-Tropez bus 7706 ~1h15, ~€3 (or boat in season)"
+    base_weight: 85         # priority #6
 
-  - name: La Ciotat
-    region: south
-    stations: ["MARSEILLE ST CHARLES"]
-    needs_extra_leg: true
-    extra_leg: "Marseille→La Ciotat TER 30min, ~€9"
-    base_weight: 70
+  - name: La Rochelle
+    region: west
+    stations: ["LA ROCHELLE VILLE"]
+    base_weight: 82         # priority #8
 
-  - name: Toulon (gateway Porquerolles)
-    region: south
-    stations: ["TOULON", "HYERES"]
-    needs_extra_leg: true
-    extra_leg: "Hyères→Porquerolles bus+ferry ~1h, ~€25 RT"
-    base_weight: 60
-
-  - name: Nice
-    region: south
-    stations: ["NICE VILLE"]
-    base_weight: 65
+  # --- Secondary tier (still desired, just below priorities) ---
 
   - name: Villefranche-sur-Mer
     region: south
     stations: ["NICE VILLE"]
     needs_extra_leg: true
     extra_leg: "Nice→Villefranche TER 10min, ~€3"
-    base_weight: 85
+    base_weight: 75
 
   - name: Èze
     region: south
     stations: ["NICE VILLE"]
     needs_extra_leg: true
     extra_leg: "Nice→Èze-sur-Mer TER 15min + bus 83 to village, ~€5"
-    base_weight: 85
+    base_weight: 75
 
   - name: Menton
     region: south
     stations: ["NICE VILLE", "MENTON"]
     needs_extra_leg: true
     extra_leg: "Nice→Menton TER 35min, ~€6 (or rare direct)"
-    base_weight: 75
+    base_weight: 72
 
-  - name: Montpellier
+  - name: Cassis
     region: south
-    stations: ["MONTPELLIER SAINT ROCH", "MONTPELLIER SUD DE FRANCE"]
+    stations: ["MARSEILLE ST CHARLES"]
+    needs_extra_leg: true
+    extra_leg: "Marseille→Cassis TER 20min, ~€7"
     base_weight: 70
 
-  - name: Carcassonne
+  - name: La Ciotat
     region: south
-    stations: ["CARCASSONNE"]
-    base_weight: 75
-
-  - name: Toulouse
-    region: south
-    stations: ["TOULOUSE MATABIAU"]
+    stations: ["MARSEILLE ST CHARLES"]
+    needs_extra_leg: true
+    extra_leg: "Marseille→La Ciotat TER 30min, ~€9"
     base_weight: 65
-
-  - name: Bordeaux
-    region: west
-    stations: ["BORDEAUX ST JEAN"]
-    base_weight: 70  # note: user prefers nearby villages
-
-  - name: La Rochelle
-    region: west
-    stations: ["LA ROCHELLE VILLE"]
-    base_weight: 75
-
-  - name: Rennes
-    region: west
-    stations: ["RENNES"]
-    base_weight: 70
 
   - name: Saint-Malo
     region: west
     stations: ["SAINT MALO", "RENNES"]
     needs_extra_leg: true
     extra_leg: "Rennes→Saint-Malo TER 1h, ~€15 (or rare direct)"
-    base_weight: 85
+    base_weight: 70
+
+  - name: Colmar (Alsace)
+    region: east
+    stations: ["COLMAR"]
+    base_weight: 68
+
+  - name: Strasbourg
+    region: east
+    stations: ["STRASBOURG"]
+    base_weight: 65
+
+  - name: Avignon
+    region: south
+    stations: ["AVIGNON TGV", "AVIGNON CENTRE"]
+    base_weight: 62
+
+  - name: Arles
+    region: south
+    stations: ["ARLES"]
+    base_weight: 60
+
+  - name: Carcassonne
+    region: south
+    stations: ["CARCASSONNE"]
+    base_weight: 60
+
+  - name: Lyon
+    region: east
+    stations: ["LYON (intramuros)", "LYON ST EXUPERY TGV."]
+    base_weight: 58
+
+  - name: Rennes
+    region: west
+    stations: ["RENNES"]
+    base_weight: 55
+
+  - name: Bordeaux
+    region: west
+    stations: ["BORDEAUX ST JEAN"]
+    base_weight: 55         # user prefers nearby villages
 
   - name: Nantes
     region: west
     stations: ["NANTES"]
-    base_weight: 70
+    base_weight: 55
+
+  - name: Toulouse
+    region: south
+    stations: ["TOULOUSE MATABIAU"]
+    base_weight: 55
+
+  - name: Toulon (gateway Porquerolles)
+    region: south
+    stations: ["TOULON", "HYERES"]
+    needs_extra_leg: true
+    extra_leg: "Hyères→Porquerolles bus+ferry ~1h, ~€25 RT"
+    base_weight: 52
 
   - name: Quimper (gateway Crozon)
     region: west
     stations: ["QUIMPER"]
     needs_extra_leg: true
     extra_leg: "Quimper→Crozon bus ~1h30, ~€2.50"
-    base_weight: 55
-
-  - name: Lyon
-    region: east
-    stations: ["LYON (intramuros)", "LYON ST EXUPERY TGV."]
-    base_weight: 70
+    base_weight: 45
 
   - name: Grenoble
     region: alps
     stations: ["GRENOBLE"]
     base_weight: 30
-    visited: true  # user has been
-
-  - name: Annecy
-    region: alps
-    stations: ["ANNECY"]
-    base_weight: 90  # fondue
-
-  - name: Strasbourg
-    region: east
-    stations: ["STRASBOURG"]
-    base_weight: 75
-
-  - name: Colmar (Alsace)
-    region: east
-    stations: ["COLMAR"]
-    base_weight: 80
+    visited: true           # user has been
 
 # --- region-specific scheduling rules ---
 # south: ride is 3h+. Friday evening out is OK (long ride = real weekend gain).
