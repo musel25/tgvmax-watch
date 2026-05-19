@@ -34,7 +34,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
         sections.append((wk, top))
 
     now = datetime.now()
-    text = report.render(sections, now)
+    text = report.render(sections, now, verbose=args.verbose)
     out_path = report.write_report(text, Path(args.reports), now)
     print(f"[sweep] wrote {out_path}", file=sys.stderr)
     if args.stdout:
@@ -57,7 +57,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--reports", default="reports")
     s.add_argument("--horizon-days", type=int, default=90,
                    help="Look up to N days ahead (dataset itself caps at J-30).")
-    s.add_argument("--top-n", type=int, default=12, help="Top pairings per weekend.")
+    s.add_argument("--top-n", type=int, default=15, help="Top pairings per weekend.")
+    s.add_argument("--verbose", action="store_true",
+                   help="Use the original full-detail layout instead of the compact one.")
     s.add_argument("--stdout", action="store_true", help="Also print the report to stdout.")
     s.set_defaults(func=cmd_sweep)
 

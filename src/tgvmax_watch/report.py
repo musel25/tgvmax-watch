@@ -1,49 +1,226 @@
-"""Render the ranked sweep into a Markdown report."""
+"""Render the ranked sweep into a Markdown report.
+
+Two render modes:
+- compact (default): one-line-per-option, message-style, dense
+- verbose (--verbose flag): the original full-detail layout
+"""
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .config import City
 from .ranker import Pairing
 from .routing import Weekend, duration_min
 
-WEEKDAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+# --- station name prettifier -------------------------------------------------
+# SNCF station names in the dataset are ALL CAPS and sometimes have trailing
+# dots or "(intramuros)" tags. Map the common ones; fall back to title-casing.
+STATION_PRETTY = {
+    "PARIS (intramuros)": "Paris",
+    "LYON (intramuros)": "Lyon Part-Dieu",
+    "LYON ST EXUPERY TGV.": "Lyon St-Exupéry",
+    "LILLE (intramuros)": "Lille",
+    "MASSY TGV": "Massy TGV",
+    "MARSEILLE ST CHARLES": "Marseille St-Charles",
+    "MONTPELLIER SAINT ROCH": "Montpellier Saint-Roch",
+    "MONTPELLIER SUD DE FRANCE": "Montpellier Sud-de-France",
+    "AIX EN PROVENCE TGV": "Aix-en-Provence TGV",
+    "NICE VILLE": "Nice Ville",
+    "BORDEAUX ST JEAN": "Bordeaux St-Jean",
+    "LA ROCHELLE VILLE": "La Rochelle",
+    "TOULOUSE MATABIAU": "Toulouse Matabiau",
+    "ST RAPHAEL VALESCURE": "St-Raphaël Valescure",
+    "LES ARCS DRAGUIGNAN": "Les Arcs-Draguignan",
+    "AVIGNON CENTRE": "Avignon Centre",
+    "AVIGNON TGV": "Avignon TGV",
+    "TOULON": "Toulon",
+    "HYERES": "Hyères",
+    "STRASBOURG": "Strasbourg",
+    "COLMAR": "Colmar",
+    "ANNECY": "Annecy",
+    "GRENOBLE": "Grenoble",
+    "RENNES": "Rennes",
+    "NANTES": "Nantes",
+    "QUIMPER": "Quimper",
+    "SAINT MALO": "Saint-Malo",
+    "CARCASSONNE": "Carcassonne",
+    "ARLES": "Arles",
+    "MENTON": "Menton",
+}
+
+WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+MONTH_SHORT = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+PRIORITY_BASE_WEIGHT = 80  # cities at/above this get a leading star
 
 
-def _fmt_date(d: date) -> str:
-    return f"{WEEKDAY[d.weekday()]} {d.isoformat()}"
+def _pretty(station: str) -> str:
+    if station in STATION_PRETTY:
+        return STATION_PRETTY[station]
+    # fallback: title-case, strip trailing dots, collapse whitespace
+    return " ".join(w.capitalize() for w in station.rstrip(".").split())
 
 
-def _fmt_train(t) -> str:
-    return f"{t.origin} → {t.destination}, {t.dep} → {t.arr} ({duration_min(t)//60}h{duration_min(t)%60:02d})"
+def _short_date(d: date) -> str:
+    return f"{MONTH_SHORT[d.month]} {d.day}"
 
 
-def render(weekends: list[tuple[Weekend, list[Pairing]]], generated_at: datetime) -> str:
+def _weekend_header_dates(wk: Weekend) -> str:
+    """Friendly weekend label, handles cross-month weekends (e.g. Jul 31 → Aug 2)."""
+    if wk.friday.month == wk.sunday.month:
+        return f"{_short_date(wk.friday)}-{wk.sunday.day}"
+    return f"{_short_date(wk.friday)} – {_short_date(wk.sunday)}"
+
+
+def _unlock_msg(unlock_day: date, today: date) -> str:
+    days = (unlock_day - today).days
+    if days <= 0:
+        return "_unlocked_"
+    if days == 1:
+        return "_unlocks tonight 00:05_"
+    if days == 2:
+        return "_unlocks tomorrow night 00:05_"
+    return f"_unlocks {_short_date(unlock_day)} 00:05 ({days}d)_"
+
+
+def _wd(d: date) -> str:
+    return WEEKDAY_SHORT[d.weekday()]
+
+
+def _nights(p: Pairing) -> int:
+    return (p.back.train.date - p.out.train.date).days
+
+
+def _city_label(c: City) -> str:
+    star = "★ " if c.base_weight >= PRIORITY_BASE_WEIGHT and not c.visited else "  "
+    name = c.name
+    if c.visited:
+        name = f"{name} (visited)"
+    return f"{star}{name}"
+
+
+def _ride_hm(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    return f"{h}h{m:02d}" if m else f"{h}h"
+
+
+# --- compact (default) -------------------------------------------------------
+
+def _compact_line(idx: int, p: Pairing, max_city_width: int) -> str:
+    nights = _nights(p)
+    out_t, back_t = p.out.train, p.back.train
+    nlabel = f"{nights}N" if nights > 0 else "0N"
+    origin_paris = _pretty(out_t.origin) != "Paris"
+    via = f" · from {_pretty(out_t.origin)}" if origin_paris else ""
+    via_back = ""
+    if _pretty(back_t.destination) != "Paris":
+        via_back = f" · back to {_pretty(back_t.destination)}"
+    total_ride = duration_min(out_t) + duration_min(back_t)
+    extra = f"   _{p.city.extra_leg}_" if p.city.needs_extra_leg else ""
+    return (
+        f"{idx:>2}  {_city_label(p.city):<{max_city_width}}  "
+        f"{_wd(out_t.date)} {out_t.dep} → {_wd(back_t.date)} {back_t.dep}   "
+        f"{nlabel} · {_ride_hm(total_ride)}{via}{via_back}{extra}"
+    )
+
+
+def _render_weekend_compact(
+    wk: Weekend, top: list[Pairing], today: date, city_col: int
+) -> list[str]:
+    header = f"🗓 {_weekend_header_dates(wk)}"
+    out: list[str] = []
+    if not top:
+        unlock = wk.friday - timedelta(days=30)
+        if unlock > today:
+            out.append(f"{header} — {_unlock_msg(unlock, today)}")
+        else:
+            out.append(f"{header} — _no TGVmax options found_")
+        return out
+    out.append(header)
+    for i, p in enumerate(top, 1):
+        out.append(_compact_line(i, p, city_col))
+    return out
+
+
+def render_compact(
+    weekends: list[tuple[Weekend, list[Pairing]]],
+    generated_at: datetime,
+    today: date,
+) -> str:
+    # global column width so blocks line up across weekends
+    all_pairings = [p for _, top in weekends for p in top]
+    if all_pairings:
+        city_col = min(max(len(_city_label(p.city)) for p in all_pairings), 22)
+    else:
+        city_col = 12
+
+    lines: list[str] = []
+    lines.append(f"# TGVmax sweep · {generated_at.strftime('%d %b %H:%M')}")
+    lines.append("")
+    lines.append("_★ = priority · N = nights on site · times are dep → dep_")
+    lines.append("")
+    lines.append("```")
+    for wk, top in weekends:
+        lines.extend(_render_weekend_compact(wk, top, today, city_col))
+        lines.append("")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+# --- verbose (--verbose flag) ------------------------------------------------
+
+def _fmt_train_verbose(t) -> str:
+    return (
+        f"{_pretty(t.origin)} → {_pretty(t.destination)}, "
+        f"{t.dep} → {t.arr} ({_ride_hm(duration_min(t))})"
+    )
+
+
+def render_verbose(
+    weekends: list[tuple[Weekend, list[Pairing]]],
+    generated_at: datetime,
+    today: date,
+) -> str:
     parts: list[str] = []
     parts.append(f"# TGVmax weekend sweep — {generated_at.isoformat(timespec='minutes')}\n")
-    parts.append(f"_Source: SNCF Open Data (od_happy_card=OUI). Confirm each trip on SNCF Connect at J-2 by 17:00._\n")
-
-    any_options = False
+    parts.append(
+        "_Source: SNCF Open Data (od_happy_card=OUI). Confirm each trip on SNCF Connect at J-2 by 17:00._\n"
+    )
     for wk, top in weekends:
         parts.append(f"## Weekend {wk.friday.isoformat()} → {wk.sunday.isoformat()}\n")
         if not top:
-            parts.append("_No TGVmax options found for any city in scope._\n")
+            unlock = wk.friday - timedelta(days=30)
+            if unlock > today:
+                parts.append(f"_J-30 unlocks {unlock.isoformat()} 00:05 Paris time._\n")
+            else:
+                parts.append("_No TGVmax options found for any city in scope._\n")
             continue
-        any_options = True
         for i, p in enumerate(top, 1):
             star = "⭐" if i <= 3 else " "
             extra = f"  _last leg_: {p.city.extra_leg}\n" if p.city.needs_extra_leg else ""
             parts.append(
                 f"{i}. {star} **{p.city.name}** — score {p.score:.0f}\n"
-                f"   - OUT {_fmt_date(p.out.train.date)}  {_fmt_train(p.out.train)}\n"
-                f"   - BACK {_fmt_date(p.back.train.date)}  {_fmt_train(p.back.train)}\n"
+                f"   - OUT {_wd(p.out.train.date)} {p.out.train.date.isoformat()}  {_fmt_train_verbose(p.out.train)}\n"
+                f"   - BACK {_wd(p.back.train.date)} {p.back.train.date.isoformat()}  {_fmt_train_verbose(p.back.train)}\n"
                 f"{extra}"
             )
         parts.append("")
-    if not any_options:
-        parts.append("\n> Either the dataset hasn't unlocked these dates yet, or peak-period quota is zero.\n")
     return "\n".join(parts)
+
+
+# --- entry points ------------------------------------------------------------
+
+def render(
+    weekends: list[tuple[Weekend, list[Pairing]]],
+    generated_at: datetime,
+    verbose: bool = False,
+    today: date | None = None,
+) -> str:
+    today = today or generated_at.date()
+    return (render_verbose if verbose else render_compact)(weekends, generated_at, today)
 
 
 def write_report(text: str, reports_dir: Path, run_at: datetime) -> Path:

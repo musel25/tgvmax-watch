@@ -79,8 +79,8 @@ def rank_weekend(
     cfg: Config,
     weekend: Weekend,
     grouped: dict[str, dict[str, list[Journey]]],
-    top_n_per_city: int = 2,
-    top_n_total: int = 12,
+    top_n_per_city: int = 4,
+    top_n_total: int = 15,
 ) -> list[Pairing]:
     """For each city build the best (out, back) pairings, then take the global top N."""
     pairings: list[Pairing] = []

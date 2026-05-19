@@ -99,7 +99,7 @@ cities:
     extra_leg: "Rennes→Saint-Malo TER 1h, ~€15 (or rare direct)"
     base_weight: 70
 
-  - name: Colmar (Alsace)
+  - name: Colmar
     region: east
     stations: ["COLMAR"]
     base_weight: 68
@@ -149,14 +149,14 @@ cities:
     stations: ["TOULOUSE MATABIAU"]
     base_weight: 55
 
-  - name: Toulon (gateway Porquerolles)
+  - name: Porquerolles
     region: south
     stations: ["TOULON", "HYERES"]
     needs_extra_leg: true
     extra_leg: "Hyères→Porquerolles bus+ferry ~1h, ~€25 RT"
     base_weight: 52
 
-  - name: Quimper (gateway Crozon)
+  - name: Crozon
     region: west
     stations: ["QUIMPER"]
     needs_extra_leg: true
