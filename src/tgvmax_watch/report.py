@@ -113,6 +113,21 @@ def _nights(p: Pairing) -> int:
     return (p.back.train.date - p.out.train.date).days
 
 
+def _on_site_label(p: Pairing) -> str:
+    """How long the user spends on site: '12h' or '1d12h'. Mirrors ranker._on_site_minutes."""
+    out_arr_h, out_arr_m = (int(x) for x in p.out.train.arr.split(":"))
+    back_dep_h, back_dep_m = (int(x) for x in p.back.train.dep.split(":"))
+    day_diff = (p.back.train.date - p.out.train.date).days
+    total_min = day_diff * 24 * 60 + (back_dep_h * 60 + back_dep_m) - (out_arr_h * 60 + out_arr_m)
+    if total_min < 0:
+        total_min = 0
+    h, m = divmod(total_min, 60)
+    if h < 24:
+        return f"{h}h" if m == 0 else f"{h}h{m:02d}"
+    d, rem_h = divmod(h, 24)
+    return f"{d}d" if rem_h == 0 else f"{d}d{rem_h}h"
+
+
 def _city_label(c: City) -> str:
     star = "★ " if c.base_weight >= PRIORITY_BASE_WEIGHT and not c.visited else "  "
     name = c.name
@@ -129,9 +144,8 @@ def _ride_hm(minutes: int) -> str:
 # --- compact (default) -------------------------------------------------------
 
 def _compact_line(idx: int, p: Pairing, max_city_width: int) -> str:
-    nights = _nights(p)
     out_t, back_t = p.out.train, p.back.train
-    nlabel = f"{nights}N" if nights > 0 else "0N"
+    on_site = _on_site_label(p)
     origin_paris = _pretty(out_t.origin) != "Paris"
     via = f" · from {_pretty(out_t.origin)}" if origin_paris else ""
     via_back = ""
@@ -143,7 +157,7 @@ def _compact_line(idx: int, p: Pairing, max_city_width: int) -> str:
     return (
         f"{idx:>2}  {_city_label(p.city):<{max_city_width}}  "
         f"{_wd(out_t.date)} {out_t.dep} → {_wd(back_t.date)} {back_t.dep}   "
-        f"{nlabel} · {_ride_hm(total_ride)}{extra}{via}{via_back}"
+        f"{on_site} on · {_ride_hm(total_ride)} ride{extra}{via}{via_back}"
     )
 
 
@@ -180,7 +194,7 @@ def render_compact(
     lines: list[str] = []
     lines.append(f"# TGVmax sweep · {generated_at.strftime('%d %b %H:%M')}")
     lines.append("")
-    lines.append("_★ = priority · N = nights on site · times are dep → dep · TGVmax free w/ Max Jeune, only last-mile cost shown_")
+    lines.append("_★ = priority · `Nh on` = hours on site · `Nh ride` = total train time · TGVmax free w/ Max Jeune, only last-mile cost shown_")
     lines.append("")
     lines.append("```")
     for wk, top in weekends:

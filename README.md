@@ -27,8 +27,9 @@ SNCF Open Data (tgvmax dataset)  →  │  api.py      │  pulls every Paris↔
                                     └──────┬───────┘
                                            ▼
                                     ┌──────────────┐
-                                    │  ranker.py   │  scores: nights on site, time-of-day fit,
-                                    │              │  ride length, visited cities, last-mile legs
+                                    │  ranker.py   │  hard-filters Fri/Sat outbound windows,
+                                    │              │  scores by on-site hours, ride length,
+                                    │              │  return-time fit, visited, last-mile legs
                                     └──────┬───────┘
                                            ▼
                                     ┌──────────────┐
@@ -93,13 +94,17 @@ cities:
     base_weight: 80
 
 scheduling:
-  south:                      # long rides — Fri evening out, Sun late return OK
-    out_windows:    [["17:00","21:00"], ["06:00","10:00"]]
-    return_windows: [["06:00","11:00"], ["18:00","23:30"]]
+  # Outbound windows are HARD: trains outside the window are dropped entirely,
+  # not just penalized. Returns are soft (only shift the score ±25).
+  south:                      # long rides — sleep on train both ways for the far ones
+    friday_out_windows:   [["18:00","23:00"]]
+    saturday_out_windows: [["06:00","12:00"]]
+    return_windows:       [["06:00","11:00"], ["18:00","23:30"]]
   east:                       # 2-3h rides
-    out_windows:    [["06:00","11:00"], ["16:00","20:00"]]
-    return_windows: [["14:00","22:00"]]
-  # …west, alps, close
+    friday_out_windows:   [["18:00","23:00"]]
+    saturday_out_windows: [["06:00","12:00"]]
+    return_windows:       [["14:00","22:00"]]
+  # …west, alps, close — same Fri/Sat outbound rule, different returns
 ```
 
 After editing, next cron run uses the new config — no restart needed.
@@ -123,15 +128,18 @@ reports/
 └── cron.log                   # stderr from every cron run; check if reports stop updating
 ```
 
-Each report is grouped by weekend, top 12 pairings per weekend. Top 3 marked with ⭐. Format:
+Each report is grouped by weekend, top 15 pairings per weekend in a one-line-per-option compact layout. Priority cities (`base_weight >= 80`) get a leading ★. Format:
 
 ```
-1. ⭐ **Lyon** — score 158
-   - OUT Fri 2026-05-22  PARIS (intramuros) → LYON (intramuros), 07:00 → 08:56 (1h56)
-   - BACK Sun 2026-05-24  LYON ST EXUPERY TGV. → PARIS (intramuros), 17:54 → 19:46 (1h52)
+🗓 May 29-31
+ 1  ★ Annecy      Fri 18:46 → Sat 19:27   20h55 on · 7h33 ride
+ 2    Lyon        Sat 10:14 → Sun 07:34   19h29 on · 3h47 ride
+ 3    Cassis      Sat 08:10 → Sun 20:14   1d10h on · 5h54 ride · +~€7
 ```
 
-For cities with `needs_extra_leg`, the report appends the last-mile hint (TER price/time).
+Columns: city · outbound (day + dep time) → return (day + dep time) · **hours on site** · total train time · last-mile cost (only when needed; TGVmax itself is free with Max Jeune).
+
+Pass `--verbose` to the sweep command for the original full-detail layout (one OUT/BACK block per option with explicit station names).
 
 ## What this is not
 

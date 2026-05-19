@@ -41,16 +41,23 @@ def _score_pair(cfg: Config, city: City, out: Journey, back: Journey) -> float |
     total_min = duration_min(out.train) + duration_min(back.train)
     s -= total_min / 60  # 1pt per ride-hour
 
-    # nights-on-site: huge driver. Same-day round trip = bad. 1 night = OK. 2 nights = great.
-    nights = (back.train.date - out.train.date).days
-    if nights == 0:
-        s -= 40  # day trip — not a weekend
-    elif nights == 1:
-        s += 10  # one Saturday night
-    else:  # 2+ nights
-        s += 30
+    # on-site time is the real driver, not nights. A 12h Saturday day trip beats a
+    # 2h-on-site ghost overnight; a full Fri-eve→Sun beats either. Smooth buckets:
+    on_site_h = _on_site_minutes(out, back) / 60
+    if on_site_h < 10:
+        s -= 10                # short — only worth it for close cities
+    elif on_site_h < 14:
+        s += 5                 # real day trip
+    elif on_site_h < 24:
+        s += 15                # long day or short overnight
+    elif on_site_h < 36:
+        s += 25                # one solid night on site
+    elif on_site_h < 50:
+        s += 35                # full Fri-eve → Sun
+    else:
+        s += 40                # extra day
 
-    # within the chosen nights, prefer later returns (more daylight on site)
+    # tiebreaker within a bucket: prefer later returns (more daylight before leaving)
     s += _to_min(back.train.dep) / 90
 
     # penalize extra TER leg
@@ -76,14 +83,17 @@ def _to_min(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _on_site_minutes(o: Journey, b: Journey) -> int:
+    """Minutes between outbound arrival and return departure, spanning days."""
+    day_diff = (b.train.date - o.train.date).days
+    return day_diff * 24 * 60 + _to_min(b.train.dep) - _to_min(o.train.arr)
+
+
 def _is_valid_pair(o: Journey, b: Journey) -> bool:
-    """Return must be at least 6h after outbound arrival (no phantom same-day pairs)."""
+    """At least 6h on site — drops phantom same-day pairs and ghost overnights alike."""
     if b.train.date < o.train.date:
         return False
-    if b.train.date == o.train.date:
-        gap = _to_min(b.train.dep) - _to_min(o.train.arr)
-        return gap >= 360  # 6h minimum on-site
-    return True
+    return _on_site_minutes(o, b) >= 360
 
 
 def rank_weekend(

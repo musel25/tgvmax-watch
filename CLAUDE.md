@@ -55,10 +55,18 @@ Six modules under `src/tgvmax_watch/`:
 
 In `ranker.py::_score_pair`. Starting from `city.base_weight`, the score adds/subtracts:
 
-- **Time-window fit** (±25 each for out & back). Windows are region-specific in `cities.yaml`.
-- **Total ride length penalty** (1 pt per ride-hour).
-- **Nights on site** (huge driver): 0 nights = -40, 1 = +10, 2+ = +30. This is what keeps Sat-only returns from beating Sun returns.
-- **Later return bonus** (within nights group).
+- **HARD outbound window filter** (returns `None`, pair is dropped): Friday departures must be in `friday_out_windows` (18:00-23:00), Saturday departures in `saturday_out_windows` (06:00-12:00). Set per region in `cities.yaml`, currently uniform across regions per the user's 2026-05-19 rule. The user would rather see *no options* for a weekend than see one that violates these windows.
+- **Return-window fit** (±25, soft). Region-specific in `cities.yaml`.
+- **Total ride length penalty** (1 pt per ride-hour). Discourages 12h-train-for-6h-on-site combos for far cities.
+- **On-site hours bucket** (the main driver — replaced the old "nights" cliff on 2026-05-19):
+  - `<10h` → -10  (too short, only worth it for close cities)
+  - `10-14h` → +5  (real day trip)
+  - `14-24h` → +15 (long day or short overnight)
+  - `24-36h` → +25 (one solid night)
+  - `36-50h` → +35 (full Fri-eve → Sun)
+  - `50h+` → +40
+  - Hard floor: `<6h` is filtered out by `_is_valid_pair`.
+- **Later return tiebreaker** (`back_dep_min / 90`, ~14pts max). Breaks ties within a bucket.
 - **Last-mile penalty** (`needs_extra_leg` → -8).
 - **Visited penalty** (-60). Drops cities the user has done to the bottom.
 - **South-region sleep bonuses**: +8 for Fri-evening out, +8 for Sun-late-evening return — matches the user's "I can sleep on the train" pattern for far destinations.
@@ -68,9 +76,11 @@ If the user complains "I want X weighted higher / Y lower", this is where to edi
 ## User context (durable)
 
 - Lives in Paris. Has Max Jeune. Every weekend free, generally wants:
-  - **South (5h+ rides)**: Fri evening out OR Sat early; Sun morning or late evening back (sleep on train).
-  - **Medium (Lyon, Strasbourg, Rennes, Nantes)**: Sat morning out, Sun afternoon/evening back.
-  - **Close**: anytime, just not arriving home after ~01:00.
+  - **Outbound is a hard rule**: Friday must depart 18:00-23:00; Saturday must depart 06:00-12:00. Any other outbound is *dropped*, not just penalized. (Stated 2026-05-19.)
+  - **Same-day round trips are fine if the day is long enough.** The user explicitly OK'd Sat→Sat returns on 2026-05-19 — "if its worth it". The on-site-hours scoring handles this naturally; do not re-introduce a nights-based cliff.
+  - **South (5h+ rides)**: Fri evening out (sleep on train) or Sat morning. Return Sun morning or Sun late evening (sleep on train Monday-morning).
+  - **Medium (Lyon, Strasbourg, Rennes, Nantes)**: Sat morning out, Sat evening / Sun afternoon / Sun evening back.
+  - **Close**: anytime within outbound windows; just avoid arriving home after ~01:00.
 - Has visited **Grenoble** (marked `visited: true`). Should not show in top picks unless nothing else works.
 - **Explicit priority list** (as of 2026-05-19, encoded in `cities.yaml` base_weights):
   1. Nice  2. Montpellier  3. Marseille  4. Aix-en-Provence  5. Annecy  6. Saint-Tropez  7. (Annecy again)  8. La Rochelle.
@@ -105,7 +115,7 @@ For ranker edits specifically, run the sweep before and after, diff the top-N pe
 - **OpenDataSoft date literals require `date'YYYY-MM-DD'`** (single-quoted), not a plain string. Schema-typed comparisons fail otherwise — there's a real example in the dev history.
 - **Some station names have trailing periods or weird casing**: e.g. `"LYON ST EXUPERY TGV."` (note the trailing dot), `"PARIS (intramuros)"`, `"LYON (intramuros)"`. Always copy exact strings from the dataset rather than guessing. Use a `group_by=destination` query to enumerate.
 - **The dataset pagination caps at 100 rows per request.** `api.fetch_oui` handles this, but if you add new queries, paginate.
-- **Saturday returns aren't bugs.** When the J-30 hasn't unlocked Sunday yet for a far-out weekend, the report falls back to showing Sat-only returns. The score correctly down-weights them (1 night vs 2). Don't "fix" this by filtering them out — they're informational.
+- **Saturday returns are explicitly OK.** The user confirmed on 2026-05-19 that Sat→Sat same-day round trips are valid if the on-site time is "worth it" (≥10h is the sweet spot). The on-site-hours bucket scores them lower than real overnights but doesn't drop them. Don't add a "must be at least N nights" filter.
 - **Friday and Sunday peak periods**: Max Jeune contractually excludes Fri afternoon/eve and Sun afternoon/eve. SNCF still publishes a few quota seats on these slots — that's why they show up. The user wants them shown.
 - **Origins include `MASSY TGV`** as well as `PARIS (intramuros)`. Massy is RER B from Paris (~30min). Don't drop it — it's a valid alternative and often the only origin for Atlantique-axis trains (Nantes, Bordeaux).
 - **Cron timezone trap.** On Debian/Ubuntu Vixie cron, `TZ=…` and `CRON_TZ=…` in a crontab do **not** change scheduling — they only set env for the executed command. The schedule is interpreted in the **system** timezone. This VPS has the system TZ set to `Europe/Paris` (`timedatectl`); don't change that or all cron times will silently drift. Confirmed via `man 5 crontab` LIMITATIONS section.
