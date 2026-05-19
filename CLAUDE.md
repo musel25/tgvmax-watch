@@ -76,8 +76,8 @@ If the user complains "I want X weighted higher / Y lower", this is where to edi
   1. Nice  2. Montpellier  3. Marseille  4. Aix-en-Provence  5. Annecy  6. Saint-Tropez  7. (Annecy again)  8. La Rochelle.
   Everything else is secondary. Treat these as a hard preference, not a hint.
 - Doesn't want auto-booking. Reads the report and books manually on SNCF Connect.
-- Doesn't want push notifications (Telegram/email) — pulls the report over SSH.
-- VPS: `ssh -i ~/.ssh/ssh-key-2026-04-05.key ubuntu@145.241.168.188`. Cron is `5 0 * * *` with `TZ=Europe/Paris`.
+- **Telegram notifications are wired** (as of 2026-05-19). Bot `@gusviado_bot` posts to chat `7135043161` after every sweep, attaching the report as a Markdown document with a short caption. Secrets live at `~/.config/tgvmax-watch/secrets.env` (chmod 600, sourced by `scripts/cron.sh`). Failure to notify never fails the sweep.
+- VPS: `ssh -i ~/.ssh/ssh-key-2026-04-05.key ubuntu@145.241.168.188`. Cron is `5 0 * * *`. **System TZ is set to `Europe/Paris` via `timedatectl`** — this is what makes the schedule correct. The `TZ=Europe/Paris` line in the crontab is decorative (Vixie cron does NOT honor per-crontab TZ for scheduling; it only sets the env passed to the script). Verified live 2026-05-19.
 - Project lives at `/home/ubuntu/tgvmax-watch` on the VPS, `~/Github/tgvmax-watch` on the laptop.
 
 ## Conventions
@@ -108,6 +108,7 @@ For ranker edits specifically, run the sweep before and after, diff the top-N pe
 - **Saturday returns aren't bugs.** When the J-30 hasn't unlocked Sunday yet for a far-out weekend, the report falls back to showing Sat-only returns. The score correctly down-weights them (1 night vs 2). Don't "fix" this by filtering them out — they're informational.
 - **Friday and Sunday peak periods**: Max Jeune contractually excludes Fri afternoon/eve and Sun afternoon/eve. SNCF still publishes a few quota seats on these slots — that's why they show up. The user wants them shown.
 - **Origins include `MASSY TGV`** as well as `PARIS (intramuros)`. Massy is RER B from Paris (~30min). Don't drop it — it's a valid alternative and often the only origin for Atlantique-axis trains (Nantes, Bordeaux).
+- **Cron timezone trap.** On Debian/Ubuntu Vixie cron, `TZ=…` and `CRON_TZ=…` in a crontab do **not** change scheduling — they only set env for the executed command. The schedule is interpreted in the **system** timezone. This VPS has the system TZ set to `Europe/Paris` (`timedatectl`); don't change that or all cron times will silently drift. Confirmed via `man 5 crontab` LIMITATIONS section.
 
 ## When the user says…
 
@@ -115,7 +116,7 @@ For ranker edits specifically, run the sweep before and after, diff the top-N pe
 - **"Add a city"** → `cities.yaml` entry. Verify the station name exists in the dataset with a quick API query first.
 - **"I visited X"** → flip `visited: true` in `cities.yaml`. Don't delete the entry (they may want to re-enable later).
 - **"Why is X not showing up?"** → likely either no `OUI` quota for that weekend yet (J-30 not fired), or station name mismatch. Query the API directly to confirm.
-- **"Notifications"** → not currently wired. Would slot into a new `notify.py` module + a config flag. User declined at launch but may revisit.
+- **"Notifications"** → wired via `notify.py` → Telegram (`@gusviado_bot`). Triggered automatically at the end of `cmd_sweep` when `TGVMAX_TELEGRAM_TOKEN` + `TGVMAX_TELEGRAM_CHAT_ID` are in env. Pass `--no-notify` to suppress. Secrets file: `~/.config/tgvmax-watch/secrets.env`.
 - **"Auto-booking"** → user is opposed for now. Would require Playwright + a logged-in SNCF Connect session. Don't build until explicitly asked.
 
 ## Don't

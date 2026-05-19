@@ -7,7 +7,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import api, config as cfgmod, ranker, report, routing
+from . import api, config as cfgmod, notify, ranker, report, routing
 
 
 def cmd_sweep(args: argparse.Namespace) -> int:
@@ -37,6 +37,8 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     text = report.render(sections, now, verbose=args.verbose)
     out_path = report.write_report(text, Path(args.reports), now)
     print(f"[sweep] wrote {out_path}", file=sys.stderr)
+    if not args.no_notify:
+        notify.notify_if_configured(sections, out_path)
     if args.stdout:
         print(text)
     return 0
@@ -61,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--verbose", action="store_true",
                    help="Use the original full-detail layout instead of the compact one.")
     s.add_argument("--stdout", action="store_true", help="Also print the report to stdout.")
+    s.add_argument("--no-notify", action="store_true",
+                   help="Skip Telegram notification even if creds are set.")
     s.set_defaults(func=cmd_sweep)
 
     st = sub.add_parser("status", help="Show the dataset's current date coverage.")

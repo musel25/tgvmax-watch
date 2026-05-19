@@ -13,3 +13,7 @@ wheels/
 reports/*.md
 reports/cron.log
 .venv/
+
+# secrets (Telegram etc.) — canonical location is ~/.config/tgvmax-watch/
+.env
+secrets.env
