@@ -1,0 +1,180 @@
+# TGVmax destinations the user wants to consider.
+# Each entry has:
+#   stations: list of SNCF station names (exact strings from the open dataset) that count as
+#             "arriving in this destination". Multiple = TGV serves it via several stations.
+#   region:   south | east | west | north | alps | close — used for time-of-day preference.
+#   needs_extra_leg: true if reaching the destination requires a TER/bus after the TGV station.
+#   extra_leg: short human description shown in the report. ~price/time of the cheap last leg.
+#   visited: cities already done — heavily down-weighted in ranking.
+#   base_weight: 0-100. Higher = the user is keener. Hand-tunable.
+
+origins:
+  paris:
+    - "PARIS (intramuros)"
+    - "MASSY TGV"  # alternative Paris-area station, still TGVmax-eligible
+
+cities:
+  - name: Avignon
+    region: south
+    stations: ["AVIGNON TGV", "AVIGNON CENTRE"]
+    base_weight: 75
+
+  - name: Aix-en-Provence
+    region: south
+    stations: ["AIX EN PROVENCE TGV"]
+    extra_leg: "shuttle bus to centre, 15min, ~€5"
+    base_weight: 70
+
+  - name: Arles
+    region: south
+    stations: ["ARLES"]
+    base_weight: 70
+
+  - name: Marseille
+    region: south
+    stations: ["MARSEILLE ST CHARLES"]
+    base_weight: 55  # gateway to Cassis/La Ciotat
+
+  - name: Cassis
+    region: south
+    stations: ["MARSEILLE ST CHARLES"]
+    needs_extra_leg: true
+    extra_leg: "Marseille→Cassis TER 20min, ~€7"
+    base_weight: 80
+
+  - name: La Ciotat
+    region: south
+    stations: ["MARSEILLE ST CHARLES"]
+    needs_extra_leg: true
+    extra_leg: "Marseille→La Ciotat TER 30min, ~€9"
+    base_weight: 70
+
+  - name: Toulon (gateway Porquerolles)
+    region: south
+    stations: ["TOULON", "HYERES"]
+    needs_extra_leg: true
+    extra_leg: "Hyères→Porquerolles bus+ferry ~1h, ~€25 RT"
+    base_weight: 60
+
+  - name: Nice
+    region: south
+    stations: ["NICE VILLE"]
+    base_weight: 65
+
+  - name: Villefranche-sur-Mer
+    region: south
+    stations: ["NICE VILLE"]
+    needs_extra_leg: true
+    extra_leg: "Nice→Villefranche TER 10min, ~€3"
+    base_weight: 85
+
+  - name: Èze
+    region: south
+    stations: ["NICE VILLE"]
+    needs_extra_leg: true
+    extra_leg: "Nice→Èze-sur-Mer TER 15min + bus 83 to village, ~€5"
+    base_weight: 85
+
+  - name: Menton
+    region: south
+    stations: ["NICE VILLE", "MENTON"]
+    needs_extra_leg: true
+    extra_leg: "Nice→Menton TER 35min, ~€6 (or rare direct)"
+    base_weight: 75
+
+  - name: Montpellier
+    region: south
+    stations: ["MONTPELLIER SAINT ROCH", "MONTPELLIER SUD DE FRANCE"]
+    base_weight: 70
+
+  - name: Carcassonne
+    region: south
+    stations: ["CARCASSONNE"]
+    base_weight: 75
+
+  - name: Toulouse
+    region: south
+    stations: ["TOULOUSE MATABIAU"]
+    base_weight: 65
+
+  - name: Bordeaux
+    region: west
+    stations: ["BORDEAUX ST JEAN"]
+    base_weight: 70  # note: user prefers nearby villages
+
+  - name: La Rochelle
+    region: west
+    stations: ["LA ROCHELLE VILLE"]
+    base_weight: 75
+
+  - name: Rennes
+    region: west
+    stations: ["RENNES"]
+    base_weight: 70
+
+  - name: Saint-Malo
+    region: west
+    stations: ["SAINT MALO", "RENNES"]
+    needs_extra_leg: true
+    extra_leg: "Rennes→Saint-Malo TER 1h, ~€15 (or rare direct)"
+    base_weight: 85
+
+  - name: Nantes
+    region: west
+    stations: ["NANTES"]
+    base_weight: 70
+
+  - name: Quimper (gateway Crozon)
+    region: west
+    stations: ["QUIMPER"]
+    needs_extra_leg: true
+    extra_leg: "Quimper→Crozon bus ~1h30, ~€2.50"
+    base_weight: 55
+
+  - name: Lyon
+    region: east
+    stations: ["LYON (intramuros)", "LYON ST EXUPERY TGV."]
+    base_weight: 70
+
+  - name: Grenoble
+    region: alps
+    stations: ["GRENOBLE"]
+    base_weight: 30
+    visited: true  # user has been
+
+  - name: Annecy
+    region: alps
+    stations: ["ANNECY"]
+    base_weight: 90  # fondue
+
+  - name: Strasbourg
+    region: east
+    stations: ["STRASBOURG"]
+    base_weight: 75
+
+  - name: Colmar (Alsace)
+    region: east
+    stations: ["COLMAR"]
+    base_weight: 80
+
+# --- region-specific scheduling rules ---
+# south: ride is 3h+. Friday evening out is OK (long ride = real weekend gain).
+#        Sunday late evening return is OK (sleep on train, work Monday).
+# east/west/alps: medium. Saturday morning out, Sunday afternoon/evening back.
+# close: anytime; just avoid arriving home after 01:00.
+scheduling:
+  south:
+    out_windows: [["17:00", "21:00"], ["06:00", "10:00"]]   # Fri eve OR Sat early
+    return_windows: [["06:00", "11:00"], ["18:00", "23:30"]] # Sun morning OR Sun late eve
+  east:
+    out_windows: [["06:00", "11:00"], ["16:00", "20:00"]]
+    return_windows: [["14:00", "22:00"]]
+  west:
+    out_windows: [["06:00", "11:00"], ["16:00", "20:00"]]
+    return_windows: [["14:00", "22:00"]]
+  alps:
+    out_windows: [["06:00", "11:00"], ["16:00", "20:00"]]
+    return_windows: [["14:00", "21:00"]]
+  close:
+    out_windows: [["06:00", "20:00"]]
+    return_windows: [["08:00", "23:00"]]

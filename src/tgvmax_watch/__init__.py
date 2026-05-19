@@ -1,0 +1,1 @@
+"""TGVmax weekend availability monitor."""
