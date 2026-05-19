@@ -21,7 +21,8 @@ class City:
 
 @dataclass(frozen=True)
 class Scheduling:
-    out_windows: tuple[tuple[str, str], ...]
+    friday_out_windows: tuple[tuple[str, str], ...]
+    saturday_out_windows: tuple[tuple[str, str], ...]
     return_windows: tuple[tuple[str, str], ...]
 
 
@@ -49,7 +50,8 @@ def load(path: Path | str = "cities.yaml") -> Config:
     )
     scheduling = {
         region: Scheduling(
-            out_windows=tuple(tuple(w) for w in s["out_windows"]),
+            friday_out_windows=tuple(tuple(w) for w in s["friday_out_windows"]),
+            saturday_out_windows=tuple(tuple(w) for w in s["saturday_out_windows"]),
             return_windows=tuple(tuple(w) for w in s["return_windows"]),
         )
         for region, s in raw["scheduling"].items()

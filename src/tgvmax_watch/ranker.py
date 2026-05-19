@@ -16,14 +16,25 @@ class Pairing:
     score: float
 
 
-def _score_pair(cfg: Config, city: City, out: Journey, back: Journey) -> float:
+def _score_pair(cfg: Config, city: City, out: Journey, back: Journey) -> float | None:
     sched = cfg.scheduling.get(city.region, cfg.scheduling["east"])
+
+    # HARD outbound rule: Fri must be in friday_out_windows (18:00-23:00),
+    # Sat must be in saturday_out_windows (morning). Anything else is dropped.
+    out_dow = out.train.date.weekday()
+    if out_dow == 4:
+        out_windows = sched.friday_out_windows
+    elif out_dow == 5:
+        out_windows = sched.saturday_out_windows
+    else:
+        return None
+    if not in_window(out.train.dep, out_windows):
+        return None
+
     s = float(city.base_weight)
 
-    # time-window fit (very important)
-    out_fit = in_window(out.train.dep, sched.out_windows)
+    # return-window fit stays soft (user only made outbound a hard rule)
     back_fit = in_window(back.train.dep, sched.return_windows)
-    s += 25 if out_fit else -15
     s += 25 if back_fit else -15
 
     # ride length penalty (very long rides are fine for far destinations, bad for close ones)
@@ -91,12 +102,15 @@ def rank_weekend(
         backs = legs["back"]
         if not outs or not backs:
             continue
-        scored = [
-            Pairing(city, o, b, _score_pair(cfg, city, o, b))
-            for o in outs
-            for b in backs
-            if _is_valid_pair(o, b)
-        ]
+        scored: list[Pairing] = []
+        for o in outs:
+            for b in backs:
+                if not _is_valid_pair(o, b):
+                    continue
+                score = _score_pair(cfg, city, o, b)
+                if score is None:  # outbound failed the hard window filter
+                    continue
+                scored.append(Pairing(city, o, b, score))
         scored.sort(key=lambda p: p.score, reverse=True)
         pairings.extend(scored[:top_n_per_city])
     pairings.sort(key=lambda p: p.score, reverse=True)

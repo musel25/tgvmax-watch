@@ -7,12 +7,31 @@ Two render modes:
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .config import City
 from .ranker import Pairing
 from .routing import Weekend, duration_min
+
+# Pulls the "~€N" or "~€N.NN" amount out of an extra_leg description.
+_EXTRA_COST_RE = re.compile(r"~€\d+(?:\.\d+)?")
+
+
+def _extra_cost(city: City) -> str:
+    """Return '+~€N' for a city that needs a last-mile leg, '' otherwise.
+
+    TGVmax itself is free for the user (covered by Max Jeune), so only the
+    extra-leg (TER / bus / ferry) cost is shown. Falls back to the full
+    extra_leg string if no €-amount could be parsed.
+    """
+    if not city.needs_extra_leg:
+        return ""
+    m = _EXTRA_COST_RE.search(city.extra_leg)
+    if m:
+        return f"+{m.group(0)}"
+    return f"+{city.extra_leg}" if city.extra_leg else "+last-mile"
 
 # --- station name prettifier -------------------------------------------------
 # SNCF station names in the dataset are ALL CAPS and sometimes have trailing
@@ -119,11 +138,12 @@ def _compact_line(idx: int, p: Pairing, max_city_width: int) -> str:
     if _pretty(back_t.destination) != "Paris":
         via_back = f" · back to {_pretty(back_t.destination)}"
     total_ride = duration_min(out_t) + duration_min(back_t)
-    extra = f"   _{p.city.extra_leg}_" if p.city.needs_extra_leg else ""
+    cost = _extra_cost(p.city)
+    extra = f" · {cost}" if cost else ""
     return (
         f"{idx:>2}  {_city_label(p.city):<{max_city_width}}  "
         f"{_wd(out_t.date)} {out_t.dep} → {_wd(back_t.date)} {back_t.dep}   "
-        f"{nlabel} · {_ride_hm(total_ride)}{via}{via_back}{extra}"
+        f"{nlabel} · {_ride_hm(total_ride)}{extra}{via}{via_back}"
     )
 
 
@@ -160,7 +180,7 @@ def render_compact(
     lines: list[str] = []
     lines.append(f"# TGVmax sweep · {generated_at.strftime('%d %b %H:%M')}")
     lines.append("")
-    lines.append("_★ = priority · N = nights on site · times are dep → dep_")
+    lines.append("_★ = priority · N = nights on site · times are dep → dep · TGVmax free w/ Max Jeune, only last-mile cost shown_")
     lines.append("")
     lines.append("```")
     for wk, top in weekends:

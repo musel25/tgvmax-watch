@@ -169,24 +169,29 @@ cities:
     base_weight: 30
     visited: true           # user has been
 
-# --- region-specific scheduling rules ---
-# south: ride is 3h+. Friday evening out is OK (long ride = real weekend gain).
-#        Sunday late evening return is OK (sleep on train, work Monday).
-# east/west/alps: medium. Saturday morning out, Sunday afternoon/evening back.
-# close: anytime; just avoid arriving home after 01:00.
+# --- scheduling rules ---
+# HARD outbound rule (user-stated, 2026-05-19): Friday departures must be 18:00-23:00,
+# Saturday departures must be morning (06:00-12:00). Anything outside is filtered out
+# entirely — the user would rather see no options for a weekend than non-compliant ones.
+# Returns remain a soft preference (region-specific) and only shift the score.
 scheduling:
   south:
-    out_windows: [["17:00", "21:00"], ["06:00", "10:00"]]   # Fri eve OR Sat early
-    return_windows: [["06:00", "11:00"], ["18:00", "23:30"]] # Sun morning OR Sun late eve
+    friday_out_windows:   [["18:00", "23:00"]]
+    saturday_out_windows: [["06:00", "12:00"]]
+    return_windows:       [["06:00", "11:00"], ["18:00", "23:30"]] # Sun morning OR Sun late eve
   east:
-    out_windows: [["06:00", "11:00"], ["16:00", "20:00"]]
-    return_windows: [["14:00", "22:00"]]
+    friday_out_windows:   [["18:00", "23:00"]]
+    saturday_out_windows: [["06:00", "12:00"]]
+    return_windows:       [["14:00", "22:00"]]
   west:
-    out_windows: [["06:00", "11:00"], ["16:00", "20:00"]]
-    return_windows: [["14:00", "22:00"]]
+    friday_out_windows:   [["18:00", "23:00"]]
+    saturday_out_windows: [["06:00", "12:00"]]
+    return_windows:       [["14:00", "22:00"]]
   alps:
-    out_windows: [["06:00", "11:00"], ["16:00", "20:00"]]
-    return_windows: [["14:00", "21:00"]]
+    friday_out_windows:   [["18:00", "23:00"]]
+    saturday_out_windows: [["06:00", "12:00"]]
+    return_windows:       [["14:00", "21:00"]]
   close:
-    out_windows: [["06:00", "20:00"]]
-    return_windows: [["08:00", "23:00"]]
+    friday_out_windows:   [["18:00", "23:00"]]
+    saturday_out_windows: [["06:00", "12:00"]]
+    return_windows:       [["08:00", "23:00"]]
