@@ -86,7 +86,7 @@ If the user complains "I want X weighted higher / Y lower", this is where to edi
   1. Nice  2. Montpellier  3. Marseille  4. Aix-en-Provence  5. Annecy  6. Saint-Tropez  7. (Annecy again)  8. La Rochelle.
   Everything else is secondary. Treat these as a hard preference, not a hint.
 - Doesn't want auto-booking. Reads the report and books manually on SNCF Connect.
-- **Telegram notifications are wired** (as of 2026-05-19). Bot `@gusviado_bot` posts to chat `7135043161` after every sweep, attaching the report as a Markdown document with a short caption. Secrets live at `~/.config/tgvmax-watch/secrets.env` (chmod 600, sourced by `scripts/cron.sh`). Failure to notify never fails the sweep.
+- **Telegram notifications are wired** (as of 2026-05-19, multi-recipient as of 2026-05-27). Bot `@gusviado_bot` posts to every chat in `TGVMAX_TELEGRAM_CHAT_IDS` (comma-separated) after every sweep, attaching the report as a Markdown document with a short caption. Current recipients: user (`7135043161`), Gustavo Scheidt (`8199832061`), Mariana Rezende (`7013577372`). Secrets live at `~/.config/tgvmax-watch/secrets.env` (chmod 600, sourced by `scripts/cron.sh`). Per-recipient failures are logged and swallowed; sweep never fails because of notify.
 - VPS: `ssh -i ~/.ssh/ssh-key-2026-04-05.key ubuntu@145.241.168.188`. Cron is `5 0 * * *`. **System TZ is set to `Europe/Paris` via `timedatectl`** — this is what makes the schedule correct. The `TZ=Europe/Paris` line in the crontab is decorative (Vixie cron does NOT honor per-crontab TZ for scheduling; it only sets the env passed to the script). Verified live 2026-05-19.
 - Project lives at `/home/ubuntu/tgvmax-watch` on the VPS, `~/Github/tgvmax-watch` on the laptop.
 
