@@ -9,10 +9,13 @@ change without touching the rest of the pipeline.
 
 from __future__ import annotations
 
+import random
 import re
+import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -101,3 +104,156 @@ def parse_journeys(
             )
         )
     return out
+
+
+PARIS_TZ = ZoneInfo("Europe/Paris")
+SEARCH_PATH = "/bff/api/v1/itineraries"
+HOME_URL = "https://www.sncf-connect.com/"
+
+# Headers shipped by the SNCF Connect frontend. x-bff-key is static; may rotate with
+# the app version — re-capture (see docs/superpowers/notes/sncf-connect-endpoint.md)
+# if searches start returning 400/401.
+BFF_HEADERS = {
+    "content-type": "application/json",
+    "accept": "application/json, text/plain, */*",
+    "x-bff-key": "ah1MPO-izehIHD-QZZ9y88n-kku876",
+    "x-client-app-id": "front-web",
+    "x-api-env": "production",
+    "x-market-locale": "fr_FR",
+    "x-client-channel": "web",
+    "x-device-class": "desktop",
+}
+
+# YOUNG + Carte Avantage Jeune (decided 2026-05-29).
+PASSENGER = {
+    "discountCards": [{"code": "YOUNG_PASS", "label": "Carte Avantage Jeune", "selected": True}],
+    "typology": "YOUNG",
+    "displayName": "4 - 29 ans",
+    "age": 25,
+    "withoutSeatAssignment": False,
+    "hasDisability": False,
+    "hasWheelchair": False,
+}
+
+# dataset station string -> SNCF Connect place (id + RESARAIL code), captured in Task 1.
+STATION_PLACES: dict[str, dict] = {
+    "PARIS (intramuros)":        {"id": "CITY_FR_6455259",      "resa": "FRPAR", "label": "Paris",                     "city": "Paris"},
+    "MASSY TGV":                 {"id": "RESARAIL_STA_8739370", "resa": "FRDJU", "label": "Massy TGV",                 "city": "Massy"},
+    "NICE VILLE":                {"id": "RESARAIL_STA_8775605", "resa": "FRNIC", "label": "Nice",                      "city": "Nice"},
+    "MONTPELLIER SAINT ROCH":    {"id": "RESARAIL_STA_8777300", "resa": "FRMPL", "label": "Montpellier Saint-Roch",    "city": "Montpellier"},
+    "MONTPELLIER SUD DE FRANCE": {"id": "RESARAIL_STA_8768888", "resa": "FRSUF", "label": "Montpellier Sud-de-France", "city": "Montpellier"},
+    "MARSEILLE ST CHARLES":      {"id": "RESARAIL_STA_8775100", "resa": "FRMSC", "label": "Marseille Saint-Charles",   "city": "Marseille"},
+    "AIX EN PROVENCE TGV":       {"id": "RESARAIL_STA_8731901", "resa": "FRAIE", "label": "Aix-en-Provence TGV",       "city": "Aix-en-Provence"},
+    "ANNECY":                    {"id": "RESARAIL_STA_8774600", "resa": "FRNCY", "label": "Annecy",                    "city": "Annecy"},
+    "ST RAPHAEL VALESCURE":      {"id": "RESARAIL_STA_8775752", "resa": "FRXSK", "label": "Saint-Raphaël – Valescure", "city": "Saint-Raphaël"},
+    "LES ARCS DRAGUIGNAN":       {"id": "RESARAIL_STA_8775544", "resa": "FRXRS", "label": "Les Arcs – Draguignan",     "city": "Les Arcs"},
+    "LA ROCHELLE VILLE":         {"id": "RESARAIL_STA_8748500", "resa": "FRLRH", "label": "La Rochelle Ville",         "city": "La Rochelle"},
+    "LYON (intramuros)":         {"id": "CITY_FR_6454573",      "resa": "FRLYS", "label": "Lyon",                      "city": "Lyon"},
+}
+
+
+def _utc_z(day: date, hhmm: str) -> str:
+    """Paris-local day+HH:MM -> UTC '...T..Z' string the BFF expects."""
+    h, m = (int(x) for x in hhmm.split(":"))
+    local = datetime(day.year, day.month, day.day, h, m, tzinfo=PARIS_TZ)
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _place(station: str) -> dict:
+    p = STATION_PLACES[station]   # KeyError if unmapped
+    return {
+        "label": p["label"],
+        "id": p["id"],
+        "codes": [{"type": "RESARAIL", "value": p["resa"]}, {"type": "RESARAIL", "value": p["resa"]}],
+        "geolocation": False,
+        "resarailCode": p["resa"],
+        "city": p["city"],
+    }
+
+
+def _build_body(origin: str, destination: str, day: date, window: tuple[str, str]) -> dict:
+    """Exact /itineraries request body (depart at window start, YOUNG + Carte Jeune)."""
+    return {
+        "schedule": {"outward": {"date": _utc_z(day, window[0]), "arrivalAt": False}},
+        "mainJourney": {"origin": _place(origin), "destination": _place(destination)},
+        "passengers": [{"id": "00000000-0000-4000-8000-000000000001", **PASSENGER}],
+        "pets": [],
+        "itineraryId": "00000000-0000-4000-8000-0000000000ff",
+        "forceDisplayResults": True,
+        "trainExpected": True,
+        "wishBike": False,
+        "strictMode": False,
+        "directJourney": False,
+        "transporterLabels": [],
+        "metadataY": {},
+        "userNavigation": ["IS_NOT_BUSINESS"],
+    }
+
+
+def _in_window(hhmm: str, window: tuple[str, str]) -> bool:
+    return bool(hhmm) and window[0] <= hhmm <= window[1]
+
+
+# JS run inside the page: POST the body via in-page fetch (carries the DataDome
+# cookie + browser TLS automatically) and return the parsed JSON.
+_FETCH_JS = """
+async ({path, headers, body}) => {
+  const r = await fetch(path, {method:'POST', headers, body: JSON.stringify(body)});
+  return {status: r.status, json: await r.json()};
+}
+"""
+
+
+class SncfConnectProvider:
+    """PriceProvider backed by SNCF Connect via a headless Playwright session.
+
+    DataDome blocks plain server-side requests, so we launch Chromium once,
+    establish a session on the homepage, then issue each search as an in-page
+    fetch. Use as a context manager (or call close()) so the browser is released.
+    """
+
+    def __init__(self, delay_range: tuple[float, float] = (1.5, 4.0), headless: bool = True) -> None:
+        self._delay_range = delay_range
+        self._headless = headless
+        self._pw = None
+        self._browser = None
+        self._page = None
+
+    def __enter__(self) -> "SncfConnectProvider":
+        self._start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def _start(self) -> None:
+        if self._page is not None:
+            return
+        from playwright.sync_api import sync_playwright
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=self._headless)
+        self._page = self._browser.new_page(
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+        )
+        self._page.goto(HOME_URL, wait_until="domcontentloaded")
+        self._page.wait_for_timeout(2500)  # let DataDome set its cookie
+
+    def close(self) -> None:
+        if self._browser is not None:
+            self._browser.close()
+        if self._pw is not None:
+            self._pw.stop()
+        self._pw = self._browser = self._page = None
+
+    def search(self, origin: str, destination: str, day: date, window: tuple[str, str]) -> list[PricedJourney]:
+        self._start()
+        body = _build_body(origin, destination, day, window)  # KeyError on unmapped station
+        lo, hi = self._delay_range
+        if hi > 0:
+            time.sleep(random.uniform(lo, hi))  # throttle to limit DataDome escalation
+        res = self._page.evaluate(_FETCH_JS, {"path": SEARCH_PATH, "headers": BFF_HEADERS, "body": body})
+        if res.get("status") != 200:
+            raise RuntimeError(f"SNCF Connect search {origin}->{destination} {day}: HTTP {res.get('status')}")
+        journeys = parse_journeys(res["json"], origin=origin, destination=destination, day=day)
+        return [j for j in journeys if _in_window(j.dep, window)]
