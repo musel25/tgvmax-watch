@@ -47,7 +47,7 @@ send it manually.
     "origin":      {"label":"Paris","id":"CITY_FR_6455259","codes":[{"type":"RESARAIL","value":"FRPAR"},{"type":"RESARAIL","value":"FRPAR"}],"geolocation":false,"resarailCode":"FRPAR","city":"Paris"},
     "destination": {"label":"Lyon","id":"CITY_FR_6454573","codes":[{"type":"RESARAIL","value":"FRLYS"},{"type":"RESARAIL","value":"FRLYS"}],"geolocation":false,"resarailCode":"FRLYS","city":"Lyon"}
   },
-  "passengers": [{"id":"<uuid>","discountCards":[],"typology":"ADULT","displayName":"30 - 59 ans","withoutSeatAssignment":false,"hasDisability":false,"hasWheelchair":false}],
+  "passengers": [{"id":"<uuid>","discountCards":[{"code":"YOUNG_PASS","label":"Carte Avantage Jeune","selected":true}],"typology":"YOUNG","displayName":"4 - 29 ans","age":25,"withoutSeatAssignment":false,"hasDisability":false,"hasWheelchair":false}],
   "pets": [],
   "itineraryId": "<uuid>",
   "forceDisplayResults": true,
@@ -68,10 +68,21 @@ Notes:
   keep it (a single-entry body still returned 400 in testing — keep the captured
   shape).
 - `itineraryId` / passenger `id` are client-generated UUIDs.
-- **OPEN QUESTION — passenger typology.** Captured as `ADULT` (standard fare). The
-  user has Max Jeune (age 16-27). For their real prices we likely want
-  `typology: "YOUNG"` plus the appropriate `discountCards` entry (Carte Avantage
-  Jeune / Max). ADULT gives an upper-bound standard fare. Decide before Task 5.
+- **Passenger profile (DECIDED 2026-05-29): YOUNG + Carte Avantage Jeune.**
+  `typology:"YOUNG"`, `displayName:"4 - 29 ans"`, integer `age` (we send e.g. 25),
+  and `discountCards:[{"code":"YOUNG_PASS","label":"Carte Avantage Jeune","selected":true}]`.
+  This gives the capped youth fares (Carte Avantage Jeune caps weekend long-distance
+  2nd class — e.g. Paris→Lyon came back at 32,80 € vs 79 € for ADULT).
+  - Caveat: this assumes the user holds a Carte Avantage Jeune (a separate ~49 €/yr
+    card, distinct from the Max Jeune subscription). The card is configurable; the
+    other selectable card in the UI is `MAX JEUNE` if we ever want that instead.
+
+### Price label parsing (IMPORTANT)
+
+`priceLabel` and `bestPrices[].priceLabel` are localized French strings using a
+**non-breaking space (U+00A0)** before `€` and a **comma decimal separator**:
+`"55 €"`, `"32,80 €"`, `"16 €"`. Parse by: strip non-digit/comma, replace `,` with
+`.`, `float(...)`. Do NOT assume a regular space or a dot decimal.
 
 ### Pagination / coverage caveat
 
@@ -96,11 +107,14 @@ Root: `longDistance.proposals`
 - `longDistance.proposals.bestPrices[]` — per-day cheapest calendar:
   `{label:"Sam 30", priceLabel:"45 €", bestPriceDateTime:"2026-05-30T19:26:00", departureDay:bool}`.
 
-Recorded sample (real, Paris→Lyon, captured): proposal[1] OUIGO 20:56 → min `65 €`;
-proposal[2] TGV INOUI 21:00 → `79 €`; proposal[0] OUIGO 19:26 → no offers (past/unavailable).
+Recorded sample (real, Paris→Lyon, YOUNG + Carte Avantage Jeune): TGV INOUI 19:27 →
+`55 €`, TGV INOUI 19:59 → `56 €`, OUIGO 20:56 → min `65 €`, TGV INOUI 21:00 → `55 €`;
+OUIGO 19:26 → no offers (past/unavailable). bestPrices day calendar capped at
+`32,80 €` for the near weekend.
 
 Full recorded response saved at `tests/fixtures/sncf_connect_search.json` (golden
-parser input).
+parser input) — this is the **YOUNG + Carte Avantage Jeune** response, matching the
+shipping config.
 
 ## Autocomplete endpoint (station-code resolution)
 
