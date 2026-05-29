@@ -13,6 +13,11 @@ origins:
     - "PARIS (intramuros)"
     - "MASSY TGV"  # alternative Paris-area station, still TGVmax-eligible
 
+# Paid-train discovery (SNCF Connect). Only priority cities (base_weight >= the
+# threshold) get live price lookups; paid trains above max_paid_price are dropped.
+max_paid_price: 30
+paid_lookup_min_weight: 80
+
 # --- Priority tier (user's explicit ranking) ---
 # 1 Nice, 2 Montpellier, 3 Marseille, 4 Aix-en-Provence, 5 Annecy,
 # 6 Saint-Tropez, 7 (Annecy again — kept high), 8 La Rochelle.

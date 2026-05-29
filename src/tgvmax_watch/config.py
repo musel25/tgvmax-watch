@@ -31,6 +31,8 @@ class Config:
     origins: tuple[str, ...]
     cities: tuple[City, ...]
     scheduling: dict[str, Scheduling] = field(default_factory=dict)
+    max_paid_price: float = 30.0
+    paid_lookup_min_weight: int = 80
 
 
 def load(path: Path | str = "cities.yaml") -> Config:
@@ -56,7 +58,13 @@ def load(path: Path | str = "cities.yaml") -> Config:
         )
         for region, s in raw["scheduling"].items()
     }
-    return Config(origins=origins, cities=cities, scheduling=scheduling)
+    return Config(
+        origins=origins,
+        cities=cities,
+        scheduling=scheduling,
+        max_paid_price=float(raw.get("max_paid_price", 30.0)),
+        paid_lookup_min_weight=int(raw.get("paid_lookup_min_weight", 80)),
+    )
 
 
 def all_destination_stations(cfg: Config) -> list[str]:
