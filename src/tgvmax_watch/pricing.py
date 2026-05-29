@@ -205,14 +205,21 @@ async ({path, headers, body}) => {
 
 
 class SncfConnectProvider:
-    """PriceProvider backed by SNCF Connect via a headless Playwright session.
+    """PriceProvider backed by SNCF Connect via a Playwright browser session.
 
-    DataDome blocks plain server-side requests, so we launch Chromium once,
-    establish a session on the homepage, then issue each search as an in-page
-    fetch. Use as a context manager (or call close()) so the browser is released.
+    SNCF Connect is protected by DataDome. A plain server-side request (httpx) is
+    blocked outright (403), and so is *headless* Chromium: DataDome's JS challenge
+    never resolves and even the homepage stays on the 403 interstitial. A **headed**
+    Chromium session (needs a display — DISPLAY locally, Xvfb on a server) lets the
+    challenge resolve; once the real homepage has loaded, in-page `fetch()` calls to
+    the BFF succeed. So we launch headed once, wait for the challenge to clear, then
+    issue every search as an in-page fetch. Use as a context manager (or call
+    close()) so the browser is released.
     """
 
-    def __init__(self, delay_range: tuple[float, float] = (1.5, 4.0), headless: bool = True) -> None:
+    def __init__(self, delay_range: tuple[float, float] = (1.5, 4.0), headless: bool = False) -> None:
+        # headless defaults to False: DataDome blocks headless Chromium. Keep False
+        # unless you have a working stealth setup; on a server run under Xvfb.
         self._delay_range = delay_range
         self._headless = headless
         self._pw = None
@@ -231,13 +238,29 @@ class SncfConnectProvider:
             return
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self._headless)
+        self._browser = self._pw.chromium.launch(
+            headless=self._headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         self._page = self._browser.new_page(
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
         )
         self._page.goto(HOME_URL, wait_until="domcontentloaded")
-        self._page.wait_for_timeout(2500)  # let DataDome set its cookie
+        self._wait_for_datadome()
+
+    def _wait_for_datadome(self, timeout_s: int = 25) -> None:
+        """Block until the DataDome challenge resolves to the real homepage.
+
+        DataDome serves a 403 interstitial first (title 'sncf-connect.com'); when
+        the challenge passes, the page becomes the real homepage (title contains
+        'Réservez'). Poll for that instead of a fixed sleep.
+        """
+        for _ in range(timeout_s):
+            self._page.wait_for_timeout(1000)
+            if "Réservez" in (self._page.title() or ""):
+                return
+        raise RuntimeError("SNCF Connect DataDome challenge did not resolve (still blocked)")
 
     def close(self) -> None:
         if self._browser is not None:
