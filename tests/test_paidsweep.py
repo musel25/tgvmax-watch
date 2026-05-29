@@ -2,7 +2,7 @@ from datetime import date
 
 from tgvmax_watch.config import City, Config, Scheduling
 from tgvmax_watch.paidsweep import gather_paid_trains
-from tgvmax_watch.pricing import PricedJourney
+from tgvmax_watch.pricing import PricedJourney, SearchResult
 from tgvmax_watch.routing import Weekend
 
 
@@ -22,48 +22,59 @@ def _cfg():
     )
 
 
+WK = Weekend(date(2026, 5, 29), date(2026, 5, 30), date(2026, 5, 31))
+
+
 class FakeProvider:
-    def __init__(self):
+    """Returns one cheap, one too-expensive, one free journey; cheap calendar."""
+    def __init__(self, calendar=None):
         self.calls = []
+        self.calendar = calendar or {}
 
     def search(self, origin, destination, day, window):
         self.calls.append((origin, destination, day, window))
-        # one cheap, one too-expensive, one free
-        return [
+        journeys = [
             PricedJourney(day, "1", origin, destination, window[0], "23:00", "OUIGO", 22.0),
             PricedJourney(day, "2", origin, destination, window[0], "23:30", "TGV INOUI", 80.0),
             PricedJourney(day, "3", origin, destination, window[0], "22:00", "TGV INOUI", 0.0),
         ]
+        # default: mark every day cheap so nothing is gated out
+        cal = self.calendar or {day: 10.0}
+        return SearchResult(journeys=journeys, cheapest_by_day=cal)
 
 
 def test_gather_only_priority_cities():
-    cfg = _cfg()
     prov = FakeProvider()
-    wk = Weekend(date(2026, 5, 29), date(2026, 5, 30), date(2026, 5, 31))
-    out_trains, back_trains = gather_paid_trains(cfg, [wk], prov)
-    # Nice is the only priority city -> Lyon never queried
+    gather_paid_trains(_cfg(), [WK], prov)
     assert all("LYON" not in d for _, d, _, _ in prov.calls)
-    assert all("NICE" in d or "NICE" in o for o, d, _, _ in prov.calls)
+    assert prov.calls and all(("NICE" in o or "NICE" in d) for o, d, _, _ in prov.calls)
 
 
 def test_gather_filters_price_threshold_and_free():
-    cfg = _cfg()
     prov = FakeProvider()
-    wk = Weekend(date(2026, 5, 29), date(2026, 5, 30), date(2026, 5, 31))
-    out_trains, back_trains = gather_paid_trains(cfg, [wk], prov)
+    out_trains, back_trains = gather_paid_trains(_cfg(), [WK], prov)
     all_trains = out_trains + back_trains
-    assert all_trains, "should keep the cheap paid train"
+    assert all_trains
     for t in all_trains:
         assert t.price_eur is not None and 0 < t.price_eur <= 30.0
 
 
 def test_gather_swallows_provider_errors():
-    cfg = _cfg()
-
     class Boom:
         def search(self, *a, **k):
             raise RuntimeError("datadome challenge")
+    out_trains, back_trains = gather_paid_trains(_cfg(), [WK], Boom())
+    assert out_trains == [] and back_trains == []
 
-    wk = Weekend(date(2026, 5, 29), date(2026, 5, 30), date(2026, 5, 31))
-    out_trains, back_trains = gather_paid_trains(cfg, [wk], Boom())
-    assert out_trains == [] and back_trains == []  # never raises
+
+def test_gather_skips_days_when_calendar_too_expensive():
+    # Calendar says EVERY day costs 99 EUR -> after the first search per direction,
+    # subsequent days for that direction are skipped.
+    prov = FakeProvider(calendar={date(2026, 5, 29): 99.0, date(2026, 5, 30): 99.0,
+                                  date(2026, 5, 31): 99.0})
+    gather_paid_trains(_cfg(), [WK], prov)
+    # Nice has 1 station. Outbound day_windows = [Fri(1 win), Sat(1 win)]; the Fri
+    # search returns the expensive calendar, so Sat is skipped -> 1 outbound call.
+    # Return day_windows = [Sat(1 win), Sun(1 win)]; Sat search -> Sun skipped -> 1 call.
+    # Total 2 calls (vs 4 without gating).
+    assert len(prov.calls) == 2

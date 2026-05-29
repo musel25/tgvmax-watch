@@ -30,6 +30,12 @@ class PricedJourney:
     price_eur: float     # cheapest 2nd-class fare in EUR; > 0 (free seats are dropped)
 
 
+@dataclass(frozen=True)
+class SearchResult:
+    journeys: list  # list[PricedJourney] in the requested window
+    cheapest_by_day: dict  # {date: float} from the bestPrices calendar
+
+
 class PriceProvider(Protocol):
     def search(
         self,
@@ -37,11 +43,12 @@ class PriceProvider(Protocol):
         destination: str,
         day: date,
         window: tuple[str, str],
-    ) -> list[PricedJourney]:
+    ) -> "SearchResult":
         """All journeys origin->destination on `day` departing within `window`,
-        each with its cheapest 2nd-class fare. `origin`/`destination` are the
-        canonical dataset station strings; the provider maps them to SNCF
-        Connect codes internally and tags results with the same strings."""
+        each with its cheapest 2nd-class fare, plus the 7-day bestPrices day
+        calendar. `origin`/`destination` are the canonical dataset station
+        strings; the provider maps them to SNCF Connect codes internally and
+        tags results with the same strings."""
         ...
 
 
@@ -103,6 +110,25 @@ def parse_journeys(
                 price_eur=price,
             )
         )
+    return out
+
+
+def parse_best_prices(payload: dict) -> dict[date, float]:
+    """The bestPrices day-calendar -> {date: cheapest EUR that day}."""
+    items = (
+        ((payload.get("longDistance") or {}).get("proposals") or {}).get("bestPrices") or []
+    )
+    out: dict[date, float] = {}
+    for it in items:
+        label = it.get("priceLabel")
+        dt = it.get("bestPriceDateTime")
+        if not label or not dt:
+            continue
+        try:
+            d = datetime.fromisoformat(dt).date()
+        except ValueError:
+            continue
+        out[d] = _parse_price_label(label)
     return out
 
 
@@ -269,7 +295,7 @@ class SncfConnectProvider:
             self._pw.stop()
         self._pw = self._browser = self._page = None
 
-    def search(self, origin: str, destination: str, day: date, window: tuple[str, str]) -> list[PricedJourney]:
+    def search(self, origin: str, destination: str, day: date, window: tuple[str, str]) -> "SearchResult":
         self._start()
         body = _build_body(origin, destination, day, window)  # KeyError on unmapped station
         lo, hi = self._delay_range
@@ -278,8 +304,10 @@ class SncfConnectProvider:
         res = self._page.evaluate(_FETCH_JS, {"path": SEARCH_PATH, "headers": BFF_HEADERS, "body": body})
         if res.get("status") != 200:
             raise RuntimeError(f"SNCF Connect search {origin}->{destination} {day}: HTTP {res.get('status')}")
-        journeys = parse_journeys(res["json"], origin=origin, destination=destination, day=day)
-        return [j for j in journeys if _in_window(j.dep, window)]
+        payload = res["json"]
+        journeys = parse_journeys(payload, origin=origin, destination=destination, day=day)
+        in_window = [j for j in journeys if _in_window(j.dep, window)]
+        return SearchResult(journeys=in_window, cheapest_by_day=parse_best_prices(payload))
 
 
 from .api import Train  # noqa: E402  (placed here to avoid import cycles)

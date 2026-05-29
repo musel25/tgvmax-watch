@@ -42,3 +42,11 @@ def test_parse_takes_cheapest_offer_and_train_no(sncf_search_response):
     assert ouigo_2056.carrier == "OUIGO"
     assert ouigo_2056.train_no == "7815"
     assert ouigo_2056.price_eur == 65.0   # min of ["74 €", "65 €"]
+
+
+def test_parse_best_prices_calendar(sncf_search_response):
+    from tgvmax_watch.pricing import parse_best_prices
+    cal = parse_best_prices(sncf_search_response)
+    assert len(cal) == 7
+    assert cal[date(2026, 6, 2)] == 16.0
+    assert cal[date(2026, 5, 29)] == 32.80

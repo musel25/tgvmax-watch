@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 
 from .config import Config
-from .pricing import PriceProvider, priced_to_train, priority_cities
+from .pricing import SearchResult, priced_to_train, priority_cities
 from .routing import Weekend
 
 
@@ -21,34 +21,50 @@ def _windows_for(cfg: Config, region: str):
     return sched
 
 
-def gather_paid_trains(
-    cfg: Config, weekends: list[Weekend], provider: PriceProvider
-):
-    """Return (out_trains, back_trains) of cheap paid Train objects."""
-    out_trains = []
-    back_trains = []
-    origin = cfg.origins[0]  # primary Paris origin for paid lookups
+def gather_paid_trains(cfg, weekends, provider):
+    """Return (out_trains, back_trains) of cheap paid Train objects.
+
+    Uses each search's bestPrices day-calendar to skip detailed searches for days
+    whose cheapest fare already exceeds max_paid_price.
+    """
+    out_trains, back_trains = [], []
+    origin = cfg.origins[0]
     for city in priority_cities(cfg):
         sched = _windows_for(cfg, city.region)
         for wk in weekends:
             for station in city.stations:
-                # OUTBOUND: Paris -> city, Fri evening and Sat morning
-                for day, windows in ((wk.friday, sched.friday_out_windows),
-                                     (wk.saturday, sched.saturday_out_windows)):
-                    for window in windows:
-                        out_trains += _safe_search(provider, origin, station, day, window, cfg)
-                # RETURN: city -> Paris, Sat and Sun, within return windows
-                for day in (wk.saturday, wk.sunday):
-                    for window in sched.return_windows:
-                        back_trains += _safe_search(provider, station, origin, day, window, cfg)
+                out_trains += _gather_direction(
+                    provider, cfg, origin, station,
+                    [(wk.friday, sched.friday_out_windows), (wk.saturday, sched.saturday_out_windows)],
+                )
+                back_trains += _gather_direction(
+                    provider, cfg, station, origin,
+                    [(wk.saturday, sched.return_windows), (wk.sunday, sched.return_windows)],
+                )
     return out_trains, back_trains
 
 
-def _safe_search(provider, origin, destination, day, window, cfg: Config):
+def _gather_direction(provider, cfg, frm, to, day_windows):
+    """Search each (day, window), skipping days the calendar says are too pricey."""
+    known: dict = {}          # {date: cheapest EUR}, learned from responses
+    trains = []
+    for day, windows in day_windows:
+        if day in known and known[day] > cfg.max_paid_price:
+            continue          # whole day already known too expensive — skip its windows
+        for window in windows:
+            res = _safe_search(provider, frm, to, day, window)
+            if res is not None:
+                known.update(res.cheapest_by_day)
+                trains += [priced_to_train(j) for j in res.journeys
+                           if 0 < j.price_eur <= cfg.max_paid_price]
+            if known.get(day, 0.0) > cfg.max_paid_price:
+                break         # this day is too pricey — skip remaining windows
+    return trains
+
+
+def _safe_search(provider, frm, to, day, window):
     try:
-        journeys = provider.search(origin, destination, day, window)
+        return provider.search(frm, to, day, window)
     except Exception as e:  # noqa: BLE001 — never let a paid lookup break the sweep
-        print(f"[paid] search failed {origin}->{destination} {day} {window}: {e}", file=sys.stderr)
-        return []
-    kept = [j for j in journeys if 0 < j.price_eur <= cfg.max_paid_price]
-    return [priced_to_train(j) for j in kept]
+        print(f"[paid] search failed {frm}->{to} {day} {window}: {e}", file=sys.stderr)
+        return None

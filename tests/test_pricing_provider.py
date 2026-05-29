@@ -39,6 +39,7 @@ def test_live_search_returns_real_prices():
     from datetime import timedelta
     day = date.today() + timedelta(days=7)
     with SncfConnectProvider() as provider:
-        journeys = provider.search("PARIS (intramuros)", "LYON (intramuros)", day, ("06:00", "23:59"))
-    assert journeys
-    assert any(j.price_eur > 0 for j in journeys)
+        result = provider.search("PARIS (intramuros)", "LYON (intramuros)", day, ("06:00", "23:59"))
+    assert result.journeys
+    assert any(j.price_eur > 0 for j in result.journeys)
+    assert result.cheapest_by_day  # calendar present
