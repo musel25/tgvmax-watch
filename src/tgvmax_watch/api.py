@@ -27,6 +27,7 @@ class Train:
     arr: str
     entity: str
     axe: str
+    price_eur: float | None = None  # None = free Max Jeune seat; float = paid fare (EUR)
 
     @classmethod
     def from_record(cls, r: dict) -> "Train":
