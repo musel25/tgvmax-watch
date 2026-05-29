@@ -14,6 +14,7 @@ class Pairing:
     out: Journey
     back: Journey
     score: float
+    total_price: float | None = None
 
 
 def _score_pair(cfg: Config, city: City, out: Journey, back: Journey) -> float | None:
@@ -75,7 +76,18 @@ def _score_pair(cfg: Config, city: City, out: Journey, back: Journey) -> float |
     if city.region == "south" and back.train.date.weekday() == 6 and _to_min(back.train.dep) >= 19 * 60:
         s += 8
 
+    # paid trains compete with free ones but pay a price penalty (free legs add 0)
+    tp = total_price(out, back)
+    if tp is not None:
+        s -= tp / 2
+
     return s
+
+
+def total_price(out: Journey, back: Journey) -> float | None:
+    """Sum of paid legs in EUR; None if both legs are free Max Jeune seats."""
+    prices = [j.train.price_eur for j in (out, back) if j.train.price_eur is not None]
+    return sum(prices) if prices else None
 
 
 def _to_min(hhmm: str) -> int:
@@ -120,7 +132,7 @@ def rank_weekend(
                 score = _score_pair(cfg, city, o, b)
                 if score is None:  # outbound failed the hard window filter
                     continue
-                scored.append(Pairing(city, o, b, score))
+                scored.append(Pairing(city, o, b, score, total_price(o, b)))
         scored.sort(key=lambda p: p.score, reverse=True)
         pairings.extend(scored[:top_n_per_city])
     pairings.sort(key=lambda p: p.score, reverse=True)
