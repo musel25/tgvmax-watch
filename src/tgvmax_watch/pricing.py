@@ -280,3 +280,31 @@ class SncfConnectProvider:
             raise RuntimeError(f"SNCF Connect search {origin}->{destination} {day}: HTTP {res.get('status')}")
         journeys = parse_journeys(res["json"], origin=origin, destination=destination, day=day)
         return [j for j in journeys if _in_window(j.dep, window)]
+
+
+from .api import Train  # noqa: E402  (placed here to avoid import cycles)
+from .config import City, Config  # noqa: E402
+
+
+def priority_cities(cfg: Config) -> list[City]:
+    """Cities eligible for paid-price lookup: base_weight at/above the threshold."""
+    return [c for c in cfg.cities if c.base_weight >= cfg.paid_lookup_min_weight]
+
+
+def priced_to_train(j: PricedJourney) -> Train:
+    """Convert a PricedJourney into the Train representation the pipeline consumes.
+
+    Carrier is stored in `axe` (already a free-form grouping field) so the report
+    can show it; `entity` is left blank. The price rides along in `price_eur`.
+    """
+    return Train(
+        date=j.date,
+        train_no=j.train_no,
+        origin=j.origin,
+        destination=j.destination,
+        dep=j.dep,
+        arr=j.arr,
+        entity="",
+        axe=j.carrier,
+        price_eur=j.price_eur,
+    )
