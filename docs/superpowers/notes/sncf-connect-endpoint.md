@@ -2,21 +2,30 @@
 
 Captured live 2026-05-29 by driving sncf-connect.com with a real browser.
 
-## DataDome verdict: BROWSER-REQUIRED
+## DataDome verdict: HEADED BROWSER REQUIRED
 
-- Plain `httpx` POST to the endpoint → **403** with `x-datadome: protected` and a
+- Plain `httpx` POST → **403** with `x-datadome: protected` and a
   `geo.captcha-delivery.com` captcha URL. Server-side replay is blocked.
-- The **same** request issued as an in-page `fetch()` inside a real browser session
-  → **200** with full JSON. The browser holds a valid `datadome` cookie (HttpOnly)
-  and the right TLS fingerprint.
+- **Headless Chromium is ALSO blocked** (verified): even the homepage GET returns
+  403 and stays on the bare interstitial (title `sncf-connect.com`). Clearing
+  `navigator.webdriver` via `--disable-blink-features=AutomationControlled` is not
+  enough on its own.
+- **Headed Chromium works** (verified): DataDome's JS challenge resolves, the real
+  homepage loads (title contains `Réservez`), and subsequent in-page `fetch()` calls
+  to the BFF return **200**.
 
-**Shipped design implication:** we must run a real browser (Playwright/Chromium).
-The efficient pattern is: launch headless Chromium once, navigate to
-`https://www.sncf-connect.com/` to establish a DataDome session, then fire **all**
-searches as cheap in-page `fetch()` calls via `page.evaluate(...)` — no page reload
-per search. One session covers many searches. This is heavier than pure `httpx`
-(Chromium on the VPS, more memory, slower cold start) but far lighter than a full
-page-load per query.
+**Shipped design (implemented in `pricing.py::SncfConnectProvider`):** launch
+**headed** Chromium once (`headless=False`, arg
+`--disable-blink-features=AutomationControlled`), `goto` the homepage, **poll until
+the challenge resolves** (title contains `Réservez`, ~3 s; not a fixed sleep), then
+fire all searches as cheap in-page `fetch()` via `page.evaluate(...)` — no page
+reload per search; one session covers many searches.
+
+**VPS implication (deferred — not deployed yet):** headed Chromium needs a display.
+Locally `DISPLAY` exists. On the headless VPS the cron must run under a virtual
+framebuffer (`xvfb-run -a tgvmax-watch sweep ...`, install `xvfb` + the Playwright
+Chromium deps). This is heavier than the current pure-`httpx` cron and is the
+concrete cost of the no-scraping-rule override. Flag to the user before deploying.
 
 ## Search endpoint
 
