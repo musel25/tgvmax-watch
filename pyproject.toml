@@ -18,3 +18,16 @@ tgvmax-watch = "tgvmax_watch.main:main"
 [build-system]
 requires = ["uv_build>=0.8.22,<0.9.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "live: hits the real SNCF Connect endpoint; deselected by default",
+]
+addopts = "-m 'not live'"
