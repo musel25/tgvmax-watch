@@ -7,7 +7,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import api, config as cfgmod, notify, ranker, report, routing
+from . import api, config as cfgmod, notify, paidsweep, pricing, ranker, report, routing
 
 
 def cmd_sweep(args: argparse.Namespace) -> int:
@@ -26,6 +26,19 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     print(f"[sweep] outbound OUI trains: {len(out_trains)}", file=sys.stderr)
     back_trains = api.fetch_oui(dest_stations, origins, today, end)
     print(f"[sweep] return   OUI trains: {len(back_trains)}", file=sys.stderr)
+
+    if not args.no_paid:
+        if args.max_paid_price is not None:
+            cfg = cfgmod.replace_max_paid_price(cfg, args.max_paid_price)
+        try:
+            with pricing.SncfConnectProvider() as provider:   # launches Chromium once
+                paid_out, paid_back = paidsweep.gather_paid_trains(cfg, weekends, provider)
+            print(f"[sweep] paid outbound trains <= {cfg.max_paid_price}EUR: {len(paid_out)}", file=sys.stderr)
+            print(f"[sweep] paid return   trains <= {cfg.max_paid_price}EUR: {len(paid_back)}", file=sys.stderr)
+            out_trains += paid_out
+            back_trains += paid_back
+        except Exception as e:  # noqa: BLE001 — browser/DataDome failure must not kill the sweep
+            print(f"[sweep] paid lookup unavailable, continuing free-only: {e}", file=sys.stderr)
 
     sections: list[tuple[routing.Weekend, list[ranker.Pairing]]] = []
     for wk in weekends:
@@ -65,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--stdout", action="store_true", help="Also print the report to stdout.")
     s.add_argument("--no-notify", action="store_true",
                    help="Skip Telegram notification even if creds are set.")
+    s.add_argument("--no-paid", action="store_true",
+                   help="Skip SNCF Connect paid-price lookups (free TGVmax only).")
+    s.add_argument("--max-paid-price", type=float, default=None,
+                   help="Override cities.yaml max_paid_price (EUR).")
     s.set_defaults(func=cmd_sweep)
 
     st = sub.add_parser("status", help="Show the dataset's current date coverage.")

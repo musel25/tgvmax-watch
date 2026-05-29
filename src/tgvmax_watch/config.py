@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,6 +66,10 @@ def load(path: Path | str = "cities.yaml") -> Config:
         max_paid_price=float(raw.get("max_paid_price", 30.0)),
         paid_lookup_min_weight=int(raw.get("paid_lookup_min_weight", 80)),
     )
+
+
+def replace_max_paid_price(cfg: Config, value: float) -> Config:
+    return dataclasses.replace(cfg, max_paid_price=value)
 
 
 def all_destination_stations(cfg: Config) -> list[str]:
