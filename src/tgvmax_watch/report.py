@@ -33,6 +33,13 @@ def _extra_cost(city: City) -> str:
         return f"+{m.group(0)}"
     return f"+{city.extra_leg}" if city.extra_leg else "+last-mile"
 
+
+def _price_tag(p: Pairing) -> str:
+    """' · 30€' for a paid pairing, '' for a free one."""
+    if p.total_price is None:
+        return ""
+    return f" · {p.total_price:.0f}€"
+
 # --- station name prettifier -------------------------------------------------
 # SNCF station names in the dataset are ALL CAPS and sometimes have trailing
 # dots or "(intramuros)" tags. Map the common ones; fall back to title-casing.
@@ -154,10 +161,11 @@ def _compact_line(idx: int, p: Pairing, max_city_width: int) -> str:
     total_ride = duration_min(out_t) + duration_min(back_t)
     cost = _extra_cost(p.city)
     extra = f" · {cost}" if cost else ""
+    price = _price_tag(p)
     return (
         f"{idx:>2}  {_city_label(p.city):<{max_city_width}}  "
         f"{_wd(out_t.date)} {out_t.dep} → {_wd(back_t.date)} {back_t.dep}   "
-        f"{on_site} on · {_ride_hm(total_ride)} ride{extra}{via}{via_back}"
+        f"{on_site} on · {_ride_hm(total_ride)} ride{price}{extra}{via}{via_back}"
     )
 
 
@@ -235,8 +243,9 @@ def render_verbose(
         for i, p in enumerate(top, 1):
             star = "⭐" if i <= 3 else " "
             extra = f"  _last leg_: {p.city.extra_leg}\n" if p.city.needs_extra_leg else ""
+            price = f" · {p.total_price:.0f}€ paid" if p.total_price is not None else " · TGVmax (free)"
             parts.append(
-                f"{i}. {star} **{p.city.name}** — score {p.score:.0f}\n"
+                f"{i}. {star} **{p.city.name}** — score {p.score:.0f}{price}\n"
                 f"   - OUT {_wd(p.out.train.date)} {p.out.train.date.isoformat()}  {_fmt_train_verbose(p.out.train)}\n"
                 f"   - BACK {_wd(p.back.train.date)} {p.back.train.date.isoformat()}  {_fmt_train_verbose(p.back.train)}\n"
                 f"{extra}"
