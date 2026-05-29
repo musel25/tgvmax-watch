@@ -17,3 +17,6 @@ reports/cron.log
 # secrets (Telegram etc.) — canonical location is ~/.config/tgvmax-watch/
 .env
 secrets.env
+
+# Playwright MCP scratch output
+.playwright-mcp/
