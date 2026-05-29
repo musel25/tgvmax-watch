@@ -30,9 +30,13 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     if not args.no_paid:
         if args.max_paid_price is not None:
             cfg = cfgmod.replace_max_paid_price(cfg, args.max_paid_price)
+        # Paid lookups hit SNCF Connect via a headed browser (slow, rate-sensitive),
+        # so bound them to a near horizon regardless of the free-sweep horizon.
+        paid_weekends = [wk for wk in weekends if (wk.friday - today).days <= cfg.paid_horizon_days]
+        print(f"[sweep] paid lookup weekends (<= {cfg.paid_horizon_days}d): {len(paid_weekends)}", file=sys.stderr)
         try:
             with pricing.SncfConnectProvider() as provider:   # launches Chromium once
-                paid_out, paid_back = paidsweep.gather_paid_trains(cfg, weekends, provider)
+                paid_out, paid_back = paidsweep.gather_paid_trains(cfg, paid_weekends, provider)
             print(f"[sweep] paid outbound trains <= {cfg.max_paid_price}EUR: {len(paid_out)}", file=sys.stderr)
             print(f"[sweep] paid return   trains <= {cfg.max_paid_price}EUR: {len(paid_back)}", file=sys.stderr)
             out_trains += paid_out

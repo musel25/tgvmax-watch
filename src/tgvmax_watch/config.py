@@ -34,6 +34,7 @@ class Config:
     scheduling: dict[str, Scheduling] = field(default_factory=dict)
     max_paid_price: float = 30.0
     paid_lookup_min_weight: int = 80
+    paid_horizon_days: int = 35  # paid lookups only cover weekends this far out (SNCF Connect sells ~J-30+)
 
 
 def load(path: Path | str = "cities.yaml") -> Config:
@@ -65,6 +66,7 @@ def load(path: Path | str = "cities.yaml") -> Config:
         scheduling=scheduling,
         max_paid_price=float(raw.get("max_paid_price", 30.0)),
         paid_lookup_min_weight=int(raw.get("paid_lookup_min_weight", 80)),
+        paid_horizon_days=int(raw.get("paid_horizon_days", 35)),
     )
 
 
