@@ -4,9 +4,11 @@
 
 **Goal:** Surface cheap (<=30 EUR) paid trains to the user's priority cities alongside free TGVmax options, so a weekend with no free seat (or a poorly-timed one) still produces a ranked, bookable option.
 
-**Architecture:** A new `pricing.py` module fetches live per-train prices from SNCF Connect's internal JSON API for the priority cities, behind a `PriceProvider` interface. Priced journeys are converted into the existing `Train` representation (with a new `price_eur` field) and merged into the same out/back lists the free sweep produces, so routing, pairing, ranking, and reporting flow through unchanged except for a price penalty in scoring and a price tag in the report.
+**Architecture:** A new `pricing.py` module fetches live per-train prices from SNCF Connect's internal JSON API (`POST /bff/api/v1/itineraries`) for the priority cities, behind a `PriceProvider` interface. Because DataDome blocks plain server-side requests (confirmed in the Task 1 spike: `httpx` → 403, in-browser `fetch` → 200), the shipped provider drives a **headless Playwright/Chromium session**: launch once, navigate to sncf-connect.com to mint a DataDome session, then issue every search as a cheap in-page `fetch()` via `page.evaluate(...)` (no page reload per search). Priced journeys are converted into the existing `Train` representation (new `price_eur` field) and merged into the same out/back lists the free sweep produces, so routing, pairing, ranking, and reporting flow through unchanged except for a price penalty in scoring and a price tag in the report.
 
-**Tech Stack:** Python 3.12+, `httpx` (already a dep), `pytest` (added here as a dev dep), `uv` for everything. Playwright MCP is used **only during the Task 1 spike** for endpoint discovery — not in shipped code unless DataDome forces it.
+**Tech Stack:** Python 3.12+, `httpx` (existing), `playwright` (added in Task 5 for the browser session — needs `uv run playwright install chromium`), `pytest` (added in Task 2 as a dev dep), `uv` for everything. Parsing is pure and tested offline against the recorded fixture; only the live browser fetch is integration-tested (`@pytest.mark.live`, deselected by default).
+
+**Spike outcome (DECIDED):** Endpoint, payload, response schema, station codes, price-label format, and the YOUNG + Carte Avantage Jeune passenger payload are all captured in `docs/superpowers/notes/sncf-connect-endpoint.md`. Tasks 4-5 below use those concrete facts. Fares are priced as **YOUNG + Carte Avantage Jeune** (`discountCards:[{"code":"YOUNG_PASS",...}]`).
 
 **Branch:** `feat/cheap-paid-trains` (already created). **Nothing is deployed to the VPS in this plan.**
 
@@ -272,7 +274,7 @@ git commit -m "feat: add PricedJourney and PriceProvider interface"
 
 ## Task 4: Response parser
 
-**Reconciliation note:** the exact JSON paths below follow the contract documented in `docs/superpowers/notes/sncf-connect-endpoint.md` from Task 1. Before writing code, open that note and the fixture, and adjust the access paths in `_iter_proposals` / `_extract` to match the **actual** recorded structure. The function signature, behavior, filtering rules, and tests below do not change.
+**The structure is now KNOWN (Task 1 spike) — the code below matches the recorded fixture exactly.** Journeys live at `longDistance.proposals.proposals[]`. Per proposal: `travelId` = `"<ISO-local-datetime>_<trainNo>"` (e.g. `"2026-05-29T19:26_7805"`), `departure.timeLabel`/`arrival.timeLabel` = `"HH:MM"`, `transporterDescription` = `"Direct OUIGO"` / `"Direct TGV INOUI"` (strip leading `"Direct "`), price = **min** over `secondComfortClassOffers.offers[].priceLabel`. **Empty `offers` ⇒ train unavailable ⇒ skip.** Price labels are localized: non-breaking space (U+00A0) + comma decimal, e.g. `"32,80 €"`, `"55 €"`.
 
 **Files:**
 - Modify: `src/tgvmax_watch/pricing.py`
@@ -280,12 +282,24 @@ git commit -m "feat: add PricedJourney and PriceProvider interface"
 
 - [ ] **Step 1: Write the failing test against the recorded fixture**
 
-Create `tests/test_pricing_parser.py`. The structural assertions hold regardless of exact values; pin the GOLDEN values by reading them from the fixture once (the first journey's dep/price as you can see them in `tests/fixtures/sncf_connect_search.json`).
+Create `tests/test_pricing_parser.py`. The recorded fixture is the YOUNG Paris→Lyon response: 5 proposals, one OUIGO 19:26 with **no offers** (must be skipped), the rest priced (TGV INOUI 19:27 → 55€, etc.). So a correct parser yields **4** journeys, all with `price_eur > 0`.
 
 ```python
 from datetime import date
 
-from tgvmax_watch.pricing import PricedJourney, parse_journeys
+import pytest
+
+from tgvmax_watch.pricing import PricedJourney, parse_journeys, _parse_price_label
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("55 €", 55.0),
+    ("32,80 €", 32.80),
+    ("16 €", 16.0),
+    ("74 €", 74.0),
+])
+def test_parse_price_label_handles_nbsp_and_comma(label, expected):
+    assert _parse_price_label(label) == expected
 
 
 def test_parse_returns_priced_journeys(sncf_search_response):
@@ -293,30 +307,28 @@ def test_parse_returns_priced_journeys(sncf_search_response):
         sncf_search_response,
         origin="PARIS (intramuros)",
         destination="LYON (intramuros)",
-        day=date(2026, 5, 30),
+        day=date(2026, 5, 29),
     )
-    assert journeys, "fixture should contain at least one journey"
+    # 5 proposals in the fixture, one has empty offers -> skipped -> 4 priced
+    assert len(journeys) == 4
     assert all(isinstance(j, PricedJourney) for j in journeys)
     for j in journeys:
         assert j.origin == "PARIS (intramuros)"
         assert j.destination == "LYON (intramuros)"
-        assert j.date == date(2026, 5, 30)
-        assert j.price_eur >= 0.0
-        assert len(j.dep) == 5 and j.dep[2] == ":"   # HH:MM
+        assert j.date == date(2026, 5, 29)
+        assert j.price_eur > 0.0                      # unavailable trains dropped
+        assert len(j.dep) == 5 and j.dep[2] == ":"    # HH:MM
         assert len(j.arr) == 5 and j.arr[2] == ":"
-        assert j.carrier
+        assert j.carrier in {"OUIGO", "TGV INOUI", "OUIGO TRAIN CLASSIQUE", "INTERCITES"}
 
 
-def test_parse_includes_free_seats_as_zero(sncf_search_response):
-    # The parser keeps 0 EUR rows; filtering happens later. At least surfaces them.
+def test_parse_takes_cheapest_offer_and_train_no(sncf_search_response):
     journeys = parse_journeys(
-        sncf_search_response,
-        origin="PARIS (intramuros)",
-        destination="LYON (intramuros)",
-        day=date(2026, 5, 30),
-    )
-    prices = [j.price_eur for j in journeys]
-    assert min(prices) >= 0.0
+        sncf_search_response, "PARIS (intramuros)", "LYON (intramuros)", date(2026, 5, 29))
+    ouigo_2056 = next(j for j in journeys if j.dep == "20:56")
+    assert ouigo_2056.carrier == "OUIGO"
+    assert ouigo_2056.train_no == "7815"
+    assert ouigo_2056.price_eur == 65.0   # min of ["74 €", "65 €"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -326,78 +338,60 @@ Expected: FAIL with `ImportError: cannot import name 'parse_journeys'`.
 
 - [ ] **Step 3: Implement the parser**
 
-Add to `src/tgvmax_watch/pricing.py` (adjust JSON paths to the Task 1 contract):
+Add to `src/tgvmax_watch/pricing.py`:
 
 ```python
-from datetime import datetime
+import re
 
 
-def _hhmm(iso_datetime: str) -> str:
-    """'2026-05-30T19:00:00' (or with tz) -> '19:00'."""
-    return datetime.fromisoformat(iso_datetime).strftime("%H:%M")
+def _parse_price_label(label: str) -> float:
+    """'32,80 €' / '55 €' (non-breaking space, comma decimal) -> float EUR."""
+    cleaned = label.replace(" ", " ").replace("€", "").strip().replace(",", ".")
+    return float(cleaned)
 
 
-def _iter_proposals(payload: dict):
-    """Yield each journey/proposal dict from the response.
-
-    PATH per Task 1 contract — reconcile with the real fixture. Common shapes:
-    payload['journeys'] or payload['proposals'] or
-    payload['longDistance']['proposals'].
-    """
-    for key in ("journeys", "proposals"):
-        if isinstance(payload.get(key), list):
-            return payload[key]
-    # nested fallback — adjust to the documented contract
-    ld = payload.get("longDistance") or {}
-    if isinstance(ld.get("proposals"), list):
-        return ld["proposals"]
-    return []
+def _proposal_price(prop: dict) -> float | None:
+    """Cheapest 2nd-class offer for this proposal, or None if no offer (unavailable)."""
+    offers = (prop.get("secondComfortClassOffers") or {}).get("offers") or []
+    prices = [_parse_price_label(o["priceLabel"]) for o in offers if o.get("priceLabel")]
+    return min(prices) if prices else None
 
 
-def _extract(prop: dict) -> tuple[str, str, str, str, float] | None:
-    """(dep_hhmm, arr_hhmm, train_no, carrier, price_eur) or None if unparseable.
-
-    PATHS per Task 1 contract — reconcile with the real fixture.
-    """
-    try:
-        dep = _hhmm(prop["departureDate"])
-        arr = _hhmm(prop["arrivalDate"])
-    except (KeyError, ValueError):
-        return None
-    train_no = str(prop.get("trainNumber") or prop.get("trainNo") or "")
-    carrier = str(prop.get("transporter") or prop.get("carrier") or "").upper() or "TGV INOUI"
-    price = prop.get("minPrice")
-    if isinstance(price, dict):
-        price = price.get("value")
-    if price is None:
-        return None
-    return dep, arr, train_no, carrier, float(price)
+def _carrier(prop: dict) -> str:
+    """'Direct OUIGO' -> 'OUIGO', 'Direct TGV INOUI' -> 'TGV INOUI'."""
+    desc = (prop.get("transporterDescription") or "").strip()
+    return re.sub(r"^Direct\s+", "", desc).strip() or "TGV INOUI"
 
 
 def parse_journeys(
     payload: dict, origin: str, destination: str, day: date
 ) -> list["PricedJourney"]:
-    """Parse a raw SNCF Connect search response into PricedJourneys.
+    """Parse a raw SNCF Connect /itineraries response into PricedJourneys.
 
-    `origin`/`destination` are the canonical dataset station strings we searched
-    for; we tag every result with them (the response uses SNCF Connect's own
-    names/codes, which would not match the routing layer's station map).
+    Journeys with no purchasable offer (sold out / past) are dropped. `origin`/
+    `destination` are the canonical dataset station strings we searched for; we tag
+    every result with them (the response uses SNCF Connect's own station names,
+    which would not match the routing layer's station map).
     """
+    proposals = (
+        (payload.get("longDistance") or {}).get("proposals") or {}
+    ).get("proposals") or []
     out: list[PricedJourney] = []
-    for prop in _iter_proposals(payload):
-        parsed = _extract(prop)
-        if parsed is None:
-            continue
-        dep, arr, train_no, carrier, price = parsed
+    for prop in proposals:
+        price = _proposal_price(prop)
+        if price is None:
+            continue  # unavailable train
+        travel_id = prop.get("travelId", "")
+        train_no = travel_id.split("_", 1)[1] if "_" in travel_id else ""
         out.append(
             PricedJourney(
                 date=day,
                 train_no=train_no,
                 origin=origin,
                 destination=destination,
-                dep=dep,
-                arr=arr,
-                carrier=carrier,
+                dep=(prop.get("departure") or {}).get("timeLabel", ""),
+                arr=(prop.get("arrival") or {}).get("timeLabel", ""),
+                carrier=_carrier(prop),
                 price_eur=price,
             )
         )
@@ -407,7 +401,7 @@ def parse_journeys(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_pricing_parser.py -v`
-Expected: PASS (2 passed). If paths mismatch, fix `_iter_proposals`/`_extract` against the fixture until green.
+Expected: PASS (7 passed: 4 parametrized + 3 behavior).
 
 - [ ] **Step 5: Commit**
 
@@ -418,156 +412,258 @@ git commit -m "feat: parse SNCF Connect search responses into PricedJourney"
 
 ---
 
-## Task 5: `SncfConnectProvider.search()`
+## Task 5: `SncfConnectProvider.search()` (Playwright browser session)
 
-**Reconciliation note:** request URL, headers, and payload come from the Task 1 contract. The DataDome verdict decides whether this HTTP provider ships as-is. If Task 1 said BROWSER-REQUIRED and the user approved a browser provider, implement `search()` with the agreed browser mechanism behind the same signature; the unit test (mocked) and the conversion/wiring tasks are unchanged.
+**Task 1 verdict: BROWSER-REQUIRED** (httpx → 403 DataDome; in-page `fetch` → 200). The provider drives a headless Playwright/Chromium session: launch once, navigate to sncf-connect.com to establish a DataDome session, then issue each search as an in-page `fetch()`. All endpoint/header/payload/station-code values below are the concrete captured values from `docs/superpowers/notes/sncf-connect-endpoint.md`. Use the provider as a context manager so the browser is opened once and reused across the whole sweep (Task 10), not per search.
 
 **Files:**
 - Modify: `src/tgvmax_watch/pricing.py`
 - Create: `tests/test_pricing_provider.py`
 
-- [ ] **Step 1: Write the failing unit test (mocked transport, offline)**
+- [ ] **Step 1: Add the playwright dependency**
 
-Create `tests/test_pricing_provider.py`:
+```bash
+uv add playwright
+uv run playwright install chromium
+```
+
+- [ ] **Step 2: Write the failing unit tests (pure body-builder, offline)**
+
+The browser call itself is only testable live (Step 5). The pure, deterministic seam is `_build_body` + the station map; test those offline. Create `tests/test_pricing_provider.py`:
 
 ```python
 from datetime import date
 
-import httpx
+import pytest
 
-from tgvmax_watch.pricing import SncfConnectProvider
-
-
-def test_search_maps_stations_and_filters_window(sncf_search_response):
-    # Mock transport returns the recorded fixture for any request.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=sncf_search_response)
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    provider = SncfConnectProvider(client=client, delay_range=(0.0, 0.0))
-
-    journeys = provider.search(
-        origin="PARIS (intramuros)",
-        destination="LYON (intramuros)",
-        day=date(2026, 5, 30),
-        window=("18:00", "23:59"),
-    )
-    assert journeys
-    for j in journeys:
-        assert "18:00" <= j.dep <= "23:59"
-        assert j.origin == "PARIS (intramuros)"
+from tgvmax_watch.pricing import SncfConnectProvider, STATION_PLACES, _build_body, _utc_z
 
 
-def test_search_unknown_station_raises_keyerror():
-    provider = SncfConnectProvider(client=httpx.Client(transport=httpx.MockTransport(
-        lambda r: httpx.Response(200, json={}))), delay_range=(0.0, 0.0))
-    try:
-        provider.search("NOWHERE", "LYON (intramuros)", date(2026, 5, 30), ("06:00", "12:00"))
-        assert False, "expected KeyError for unmapped station"
-    except KeyError:
-        pass
+def test_utc_z_converts_paris_local_to_utc():
+    # 18:00 Paris in summer (CEST, UTC+2) -> 16:00 UTC, matches captured payload
+    assert _utc_z(date(2026, 5, 30), "18:00") == "2026-05-30T16:00:00.000Z"
+
+
+def test_build_body_sets_codes_date_and_young_passenger():
+    body = _build_body("PARIS (intramuros)", "LYON (intramuros)", date(2026, 5, 30), ("06:00", "12:00"))
+    assert body["mainJourney"]["origin"]["resarailCode"] == "FRPAR"
+    assert body["mainJourney"]["origin"]["id"] == "CITY_FR_6455259"
+    assert body["mainJourney"]["destination"]["resarailCode"] == "FRLYS"
+    assert body["schedule"]["outward"]["date"] == "2026-05-30T04:00:00.000Z"  # 06:00 CEST
+    p = body["passengers"][0]
+    assert p["typology"] == "YOUNG"
+    assert p["discountCards"][0]["code"] == "YOUNG_PASS"
+
+
+def test_build_body_unknown_station_raises_keyerror():
+    with pytest.raises(KeyError):
+        _build_body("NOWHERE", "LYON (intramuros)", date(2026, 5, 30), ("06:00", "12:00"))
+
+
+def test_station_map_covers_priority_stations():
+    for s in ["PARIS (intramuros)", "NICE VILLE", "MARSEILLE ST CHARLES",
+              "AIX EN PROVENCE TGV", "ANNECY", "ST RAPHAEL VALESCURE",
+              "LES ARCS DRAGUIGNAN", "LA ROCHELLE VILLE",
+              "MONTPELLIER SAINT ROCH", "MONTPELLIER SUD DE FRANCE"]:
+        assert s in STATION_PLACES
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_pricing_provider.py -v`
-Expected: FAIL with `ImportError: cannot import name 'SncfConnectProvider'`.
+Expected: FAIL with `ImportError: cannot import name '_build_body'`.
 
-- [ ] **Step 3: Implement the provider**
+- [ ] **Step 4: Implement the provider (Playwright browser session)**
 
-Add to `src/tgvmax_watch/pricing.py` (fill `STATION_CODES`, `SEARCH_URL`, `HEADERS`, and `_payload` from the Task 1 contract):
+Add to `src/tgvmax_watch/pricing.py`. All constants are the captured Task 1 values.
 
 ```python
 import random
 import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-import httpx
+PARIS_TZ = ZoneInfo("Europe/Paris")
+SEARCH_PATH = "/bff/api/v1/itineraries"
+HOME_URL = "https://www.sncf-connect.com/"
 
-SEARCH_URL = "https://www.sncf-connect.com/..."  # from Task 1 contract
-
-HEADERS = {
-    # from Task 1 contract — user-agent, accept, content-type, any mandatory x- headers
+# Headers shipped by the SNCF Connect frontend. x-bff-key is static; may rotate with
+# the app version — re-capture (see docs/superpowers/notes/sncf-connect-endpoint.md)
+# if searches start returning 400/401.
+BFF_HEADERS = {
+    "content-type": "application/json",
+    "accept": "application/json, text/plain, */*",
+    "x-bff-key": "ah1MPO-izehIHD-QZZ9y88n-kku876",
+    "x-client-app-id": "front-web",
+    "x-api-env": "production",
+    "x-market-locale": "fr_FR",
+    "x-client-channel": "web",
+    "x-device-class": "desktop",
 }
 
-# dataset station string -> SNCF Connect place identifier (from Task 1, Step 5)
-STATION_CODES: dict[str, str] = {
-    # "PARIS (intramuros)": "...",
-    # "NICE VILLE": "...",
-    # ...
+# YOUNG + Carte Avantage Jeune (decided 2026-05-29).
+PASSENGER = {
+    "discountCards": [{"code": "YOUNG_PASS", "label": "Carte Avantage Jeune", "selected": True}],
+    "typology": "YOUNG",
+    "displayName": "4 - 29 ans",
+    "age": 25,
+    "withoutSeatAssignment": False,
+    "hasDisability": False,
+    "hasWheelchair": False,
 }
+
+# dataset station string -> SNCF Connect place (id + RESARAIL code), captured in Task 1.
+STATION_PLACES: dict[str, dict] = {
+    "PARIS (intramuros)":        {"id": "CITY_FR_6455259",      "resa": "FRPAR", "label": "Paris",                     "city": "Paris"},
+    "MASSY TGV":                 {"id": "RESARAIL_STA_8739370", "resa": "FRDJU", "label": "Massy TGV",                 "city": "Massy"},
+    "NICE VILLE":                {"id": "RESARAIL_STA_8775605", "resa": "FRNIC", "label": "Nice",                      "city": "Nice"},
+    "MONTPELLIER SAINT ROCH":    {"id": "RESARAIL_STA_8777300", "resa": "FRMPL", "label": "Montpellier Saint-Roch",    "city": "Montpellier"},
+    "MONTPELLIER SUD DE FRANCE": {"id": "RESARAIL_STA_8768888", "resa": "FRSUF", "label": "Montpellier Sud-de-France", "city": "Montpellier"},
+    "MARSEILLE ST CHARLES":      {"id": "RESARAIL_STA_8775100", "resa": "FRMSC", "label": "Marseille Saint-Charles",   "city": "Marseille"},
+    "AIX EN PROVENCE TGV":       {"id": "RESARAIL_STA_8731901", "resa": "FRAIE", "label": "Aix-en-Provence TGV",       "city": "Aix-en-Provence"},
+    "ANNECY":                    {"id": "RESARAIL_STA_8774600", "resa": "FRNCY", "label": "Annecy",                    "city": "Annecy"},
+    "ST RAPHAEL VALESCURE":      {"id": "RESARAIL_STA_8775752", "resa": "FRXSK", "label": "Saint-Raphaël – Valescure", "city": "Saint-Raphaël"},
+    "LES ARCS DRAGUIGNAN":       {"id": "RESARAIL_STA_8775544", "resa": "FRXRS", "label": "Les Arcs – Draguignan",     "city": "Les Arcs"},
+    "LA ROCHELLE VILLE":         {"id": "RESARAIL_STA_8748500", "resa": "FRLRH", "label": "La Rochelle Ville",         "city": "La Rochelle"},
+    "LYON (intramuros)":         {"id": "CITY_FR_6454573",      "resa": "FRLYS", "label": "Lyon",                      "city": "Lyon"},
+}
+
+
+def _utc_z(day: date, hhmm: str) -> str:
+    """Paris-local day+HH:MM -> UTC '...T..Z' string the BFF expects."""
+    h, m = (int(x) for x in hhmm.split(":"))
+    local = datetime(day.year, day.month, day.day, h, m, tzinfo=PARIS_TZ)
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _place(station: str) -> dict:
+    p = STATION_PLACES[station]   # KeyError if unmapped
+    return {
+        "label": p["label"],
+        "id": p["id"],
+        "codes": [{"type": "RESARAIL", "value": p["resa"]}, {"type": "RESARAIL", "value": p["resa"]}],
+        "geolocation": False,
+        "resarailCode": p["resa"],
+        "city": p["city"],
+    }
+
+
+def _build_body(origin: str, destination: str, day: date, window: tuple[str, str]) -> dict:
+    """Exact /itineraries request body (depart at window start, YOUNG + Carte Jeune)."""
+    return {
+        "schedule": {"outward": {"date": _utc_z(day, window[0]), "arrivalAt": False}},
+        "mainJourney": {"origin": _place(origin), "destination": _place(destination)},
+        "passengers": [{"id": "00000000-0000-4000-8000-000000000001", **PASSENGER}],
+        "pets": [],
+        "itineraryId": "00000000-0000-4000-8000-0000000000ff",
+        "forceDisplayResults": True,
+        "trainExpected": True,
+        "wishBike": False,
+        "strictMode": False,
+        "directJourney": False,
+        "transporterLabels": [],
+        "metadataY": {},
+        "userNavigation": ["IS_NOT_BUSINESS"],
+    }
 
 
 def _in_window(hhmm: str, window: tuple[str, str]) -> bool:
-    return window[0] <= hhmm <= window[1]
+    return bool(hhmm) and window[0] <= hhmm <= window[1]
+
+
+# JS run inside the page: POST the body via in-page fetch (carries the DataDome
+# cookie + browser TLS automatically) and return the parsed JSON.
+_FETCH_JS = """
+async ({path, headers, body}) => {
+  const r = await fetch(path, {method:'POST', headers, body: JSON.stringify(body)});
+  return {status: r.status, json: await r.json()};
+}
+"""
 
 
 class SncfConnectProvider:
-    """PriceProvider backed by SNCF Connect's internal search API."""
+    """PriceProvider backed by SNCF Connect via a headless Playwright session.
 
-    def __init__(
-        self,
-        client: httpx.Client | None = None,
-        delay_range: tuple[float, float] = (1.5, 4.0),
-        timeout: float = 30.0,
-    ) -> None:
-        self._client = client or httpx.Client(timeout=timeout, headers=HEADERS)
+    DataDome blocks plain server-side requests, so we launch Chromium once,
+    establish a session on the homepage, then issue each search as an in-page
+    fetch. Use as a context manager (or call close()) so the browser is released.
+    """
+
+    def __init__(self, delay_range: tuple[float, float] = (1.5, 4.0), headless: bool = True) -> None:
         self._delay_range = delay_range
+        self._headless = headless
+        self._pw = None
+        self._browser = None
+        self._page = None
 
-    def _payload(self, origin_code: str, destination_code: str, day: date, window: tuple[str, str]) -> dict:
-        # Build the search body per the Task 1 contract. Depart at window start.
-        return {
-            "origin": {"code": origin_code},
-            "destination": {"code": destination_code},
-            "outwardDate": f"{day.isoformat()}T{window[0]}:00",
-            "travelClass": "SECOND",
-            "passengers": [{"typology": "YOUNG"}],
-        }
+    def __enter__(self) -> "SncfConnectProvider":
+        self._start()
+        return self
 
-    def search(
-        self, origin: str, destination: str, day: date, window: tuple[str, str]
-    ) -> list[PricedJourney]:
-        origin_code = STATION_CODES[origin]            # KeyError if unmapped — caller handles
-        destination_code = STATION_CODES[destination]
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def _start(self) -> None:
+        if self._page is not None:
+            return
+        from playwright.sync_api import sync_playwright
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=self._headless)
+        self._page = self._browser.new_page(
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+        )
+        self._page.goto(HOME_URL, wait_until="domcontentloaded")
+        self._page.wait_for_timeout(2500)  # let DataDome set its cookie
+
+    def close(self) -> None:
+        if self._browser is not None:
+            self._browser.close()
+        if self._pw is not None:
+            self._pw.stop()
+        self._pw = self._browser = self._page = None
+
+    def search(self, origin: str, destination: str, day: date, window: tuple[str, str]) -> list[PricedJourney]:
+        self._start()
+        body = _build_body(origin, destination, day, window)  # KeyError on unmapped station
         lo, hi = self._delay_range
         if hi > 0:
-            time.sleep(random.uniform(lo, hi))         # throttle to limit DataDome exposure
-        resp = self._client.post(SEARCH_URL, json=self._payload(origin_code, destination_code, day, window))
-        resp.raise_for_status()
-        journeys = parse_journeys(resp.json(), origin=origin, destination=destination, day=day)
+            time.sleep(random.uniform(lo, hi))  # throttle to limit DataDome escalation
+        res = self._page.evaluate(_FETCH_JS, {"path": SEARCH_PATH, "headers": BFF_HEADERS, "body": body})
+        if res.get("status") != 200:
+            raise RuntimeError(f"SNCF Connect search {origin}->{destination} {day}: HTTP {res.get('status')}")
+        journeys = parse_journeys(res["json"], origin=origin, destination=destination, day=day)
         return [j for j in journeys if _in_window(j.dep, window)]
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_pricing_provider.py -v`
-Expected: PASS (2 passed).
+Expected: PASS (4 passed). These cover the pure logic; the browser path is exercised live in Step 6.
 
-- [ ] **Step 5: Add a live integration test (deselected by default)**
+- [ ] **Step 6: Add a live integration test (deselected by default)**
 
 Append to `tests/test_pricing_provider.py`:
 
 ```python
-import pytest
-
-
 @pytest.mark.live
 def test_live_search_returns_real_prices():
-    from datetime import date, timedelta
-    provider = SncfConnectProvider()
+    from datetime import timedelta
     day = date.today() + timedelta(days=7)
-    journeys = provider.search("PARIS (intramuros)", "LYON (intramuros)", day, ("06:00", "23:59"))
+    with SncfConnectProvider() as provider:
+        journeys = provider.search("PARIS (intramuros)", "LYON (intramuros)", day, ("06:00", "23:59"))
     assert journeys
     assert any(j.price_eur > 0 for j in journeys)
 ```
 
 Run (manual, opt-in): `uv run pytest tests/test_pricing_provider.py -m live -v`
-Expected: PASS if DataDome allows; this is the real-world confirmation. Not run in the default suite.
+Expected: PASS — this is the real DataDome-passing confirmation. Not in the default suite.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/tgvmax_watch/pricing.py tests/test_pricing_provider.py
-git commit -m "feat: SncfConnectProvider with throttling and window filtering"
+git add src/tgvmax_watch/pricing.py tests/test_pricing_provider.py pyproject.toml uv.lock
+git commit -m "feat: SncfConnectProvider via Playwright browser session"
 ```
 
 ---
@@ -1128,13 +1224,18 @@ In `cmd_sweep`, after the two `api.fetch_oui` calls and their prints (after line
     if not args.no_paid:
         if args.max_paid_price is not None:
             cfg = cfgmod.replace_max_paid_price(cfg, args.max_paid_price)
-        provider = pricing.SncfConnectProvider()
-        paid_out, paid_back = paidsweep.gather_paid_trains(cfg, weekends, provider)
-        print(f"[sweep] paid outbound trains <= {cfg.max_paid_price}EUR: {len(paid_out)}", file=sys.stderr)
-        print(f"[sweep] paid return   trains <= {cfg.max_paid_price}EUR: {len(paid_back)}", file=sys.stderr)
-        out_trains += paid_out
-        back_trains += paid_back
+        try:
+            with pricing.SncfConnectProvider() as provider:   # launches Chromium once
+                paid_out, paid_back = paidsweep.gather_paid_trains(cfg, weekends, provider)
+            print(f"[sweep] paid outbound trains <= {cfg.max_paid_price}EUR: {len(paid_out)}", file=sys.stderr)
+            print(f"[sweep] paid return   trains <= {cfg.max_paid_price}EUR: {len(paid_back)}", file=sys.stderr)
+            out_trains += paid_out
+            back_trains += paid_back
+        except Exception as e:  # noqa: BLE001 — browser/DataDome failure must not kill the sweep
+            print(f"[sweep] paid lookup unavailable, continuing free-only: {e}", file=sys.stderr)
 ```
+
+The outer `try` covers browser launch / DataDome failures; `gather_paid_trains` already swallows per-search errors internally (Task 10 gather loop). Either way the free sweep is never blocked.
 
 Add the argparse flags to the `sweep` parser (after `--no-notify`):
 
